@@ -295,9 +295,11 @@ class SV08Loadcell:
             # des Bereichs - und die Starthöhe war ja frei
             lift_z = min(z_probe + self.xy_lift, z_max)
             if rough or clean is not None:
-                # Grob-Z aus der Probe: Kontakt bei z_probe - gap angenommen.
-                # gap ist eine Untergrenze, die Düse steht also eher höher
-                rough_shift = pos_endstop - (z_probe - gap)
+                # Grob-Z aus der Probe (Filament an der Düse stört sie nicht):
+                # Kontakt bei z_probe - erwarteter Abstand. Ohne Kalibrierung
+                # nur die Untergrenze gap, die Düse steht dann eher höher
+                rough_gap = expected if expected is not None else gap
+                rough_shift = pos_endstop - (z_probe - rough_gap)
             if rough:
                 self._set_rough_z(rough_shift)
                 if clean is not None:
@@ -403,6 +405,14 @@ class SV08Loadcell:
                                           None)
         self.cleaning = True
         try:
+            # Vor dem ersten QGL kann die Gantry schief stehen, dann stimmt
+            # die Wischhöhe nicht. QGL misst mit der induktiven Probe,
+            # danach grob neu homen
+            qgl = self.printer.lookup_object('quad_gantry_level', None)
+            if qgl is not None and not qgl.get_status(
+                    self.reactor.monotonic()).get('applied'):
+                self.gcode.run_script_from_command(
+                    "QUAD_GANTRY_LEVEL\nLOADCELL_HOME ROUGH=1 AUTO_CLEAN=0")
             self.gcode.run_script_from_command(
                 "_CLEAN_NOZZLE_WIPE PASSES=2" if wipe is not None
                 else "CLEAN_NOZZLE MAX_AGE=0")

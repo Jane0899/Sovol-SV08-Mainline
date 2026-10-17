@@ -803,7 +803,10 @@ class SV08Loadcell:
                  / sum((r[0] - mv) ** 2 for r in rows))
         latency = -slope
         period = sorted(r[1] / r[0] for r in rows)[n // 2]
-        ok = [r for r in rows if r[1] <= self.LOADCELL_TARGET_RANGE]
+        # Gemessene Streuung UND Modell (Geschwindigkeit x Messtakt) müssen
+        # passen: 8 Messungen können zufällig eng liegen
+        ok = [r for r in rows if r[1] <= self.LOADCELL_TARGET_RANGE
+              and r[0] * period <= self.LOADCELL_TARGET_RANGE]
         speed = max(r[0] for r in ok) if ok else self.LOADCELL_SPEEDS[0]
         # Abklingzeit
         self.toolhead.manual_move([None, None, self.toolhead.get_position()[2]

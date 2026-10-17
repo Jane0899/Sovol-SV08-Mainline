@@ -80,6 +80,10 @@ class SV08Loadcell:
                                                above=0.)
         self.xy_lift = config.getfloat('xy_lift', 5., above=0.)
         self.release_timeout = config.getfloat('release_timeout', 2., above=0.)
+        # Filament an der Düse verfälscht das Homing: seit dem Start noch nie
+        # gereinigt oder Abstand Probe/Kontakt zu klein -> CLEAN_NOZZLE
+        self.auto_clean = config.getboolean('auto_clean', True)
+        self.cleaning = False
         # AUTO_Z_OFFSET
         self.z_correction = config.getfloat('z_correction', 0.)
         self.max_offset = config.getfloat('max_offset', 1., above=0.)
@@ -224,6 +228,14 @@ class SV08Loadcell:
         speed = gcmd.get_float('SPEED', self.home_speed, above=0.)
         clearance = gcmd.get_float('CLEARANCE', self.home_clearance,
                                    minval=0.)
+        rough = gcmd.get_int('ROUGH', 0, minval=0, maxval=1)
+        clean = self._clean_macro() if (self.auto_clean
+                                        and not self.cleaning) else None
+        if clean is not None and clean.variables.get('last_clean', 0) < 0:
+            gcmd.respond_info("LOADCELL_HOME: seit dem Start noch nicht"
+                              " gereinigt - grob homen, CLEAN_NOZZLE, dann"
+                              " sauber homen")
+            rough = 1
         gap = gcmd.get_float('GAP', self.probe_contact_gap)
         max_slow = gcmd.get_float('MAX_SLOW_TRAVEL', self.max_slow_travel,
                                   above=0.)
@@ -255,6 +267,18 @@ class SV08Loadcell:
             pos[2] = z_min
             z_probe = phoming.probing_move(probe_endstop, pos,
                                            coarse_speed)[2]
+            if rough or clean is not None:
+                # Grob-Z aus der Probe: Kontakt bei z_probe - gap angenommen.
+                # gap ist eine Untergrenze, die Düse steht also eher höher
+                rough_shift = pos_endstop - (z_probe - gap)
+            if rough:
+                self._set_rough_z(rough_shift)
+                if clean is not None:
+                    self._run_clean()
+                else:
+                    gcmd.respond_info("LOADCELL_HOME: grob über die Probe"
+                                      " gehomt (ohne Wägezelle)")
+                return
             # 2. Düse über die Zelle, knapp über erwarteten Kontakt
             th.manual_move([None, None, z_probe + self.xy_lift],
                            self.lift_speed)
@@ -273,6 +297,15 @@ class SV08Loadcell:
             if z_probe - z_cell < gap:
                 th.manual_move([None, None, z_probe + self.xy_lift],
                                self.lift_speed)
+                age = self._clean_age(clean)
+                if clean is not None and (age is None or age > 60.):
+                    gcmd.respond_info(
+                        "LOADCELL_HOME: Abstand Probe/Kontakt %.3f mm, erwartet"
+                        " mindestens %.3f mm - Filament an der Düse,"
+                        " reinige" % (z_probe - z_cell, gap))
+                    self._set_rough_z(rough_shift)
+                    self._run_clean()
+                    return
                 raise gcmd.error(
                     "LOADCELL_HOME: Abstand Probe/Kontakt %.3f mm, erwartet"
                     " mindestens %.3f mm - hängt Filament an der Düse? Düse"
@@ -293,6 +326,31 @@ class SV08Loadcell:
             " %.3f mm mit %.2f mm/s, Z=%.3f gesetzt"
             % (z_probe, z_cell, z_probe - z_cell, gap, start - z_cell,
                speed, pos_endstop))
+    def _clean_macro(self):
+        return self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None)
+    def _clean_age(self, clean):
+        # Sekunden seit der letzten Reinigung, None = noch nie. Direkt nach
+        # einer Reinigung nicht noch einmal reinigen (Schleife)
+        last = clean.variables.get('last_clean', -1)
+        if last < 0:
+            return None
+        now = self.toolhead.get_status(
+            self.reactor.monotonic())['estimated_print_time']
+        return now - last
+    def _set_rough_z(self, shift):
+        th = self.toolhead
+        pos = th.get_position()
+        pos[2] += shift
+        th.set_position(pos, homing_axes="z")
+        th.manual_move([None, None, pos[2] + self.safe_z], self.lift_speed)
+    def _run_clean(self):
+        # CLEAN_NOZZLE homt am Ende mit LOADCELL_HOME neu, hier ohne erneute
+        # Reinigung (sonst Schleife)
+        self.cleaning = True
+        try:
+            self.gcode.run_script_from_command("CLEAN_NOZZLE MAX_AGE=0")
+        finally:
+            self.cleaning = False
     # Automatischer Z-Offset
     def cmd_AUTO_Z_OFFSET(self, gcmd):
         homed = self._homed()
@@ -770,7 +828,7 @@ class SV08Loadcell:
         self._prompt_end()
         self._ensure_leveled()
         if self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None):
-            self._run("CLEAN_NOZZLE")
+            self._run("CLEAN_NOZZLE MAX_AGE=0")
         self._run("M109 S%d" % (self.wizard['temp'],))
         self._next("5. Düse heiß", [
             "Düse sauber und auf %d °C." % (self.wizard['temp'],),

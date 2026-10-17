@@ -394,7 +394,8 @@ class SV08Loadcell:
         th.set_position(pos, homing_axes="z")
         th.manual_move([None, None, pos[2] + self.safe_z], self.lift_speed)
     def _run_clean(self):
-        # Nur das Wischen, nicht CLEAN_NOZZLE: das beginnt mit _CG28, und
+        # Doppelt wischen (zähes Filament wie PETG geht nicht immer beim
+        # ersten Mal ab). Nur das Wischen, nicht CLEAN_NOZZLE: das beginnt mit _CG28, und
         # LOADCELL_HOME läuft oft gerade aus _CG28 heraus (START_PRINT) -
         # Klipper bricht rekursive Makros ab. Das Wischen homt am Ende mit
         # LOADCELL_HOME AUTO_CLEAN=0 neu
@@ -403,7 +404,7 @@ class SV08Loadcell:
         self.cleaning = True
         try:
             self.gcode.run_script_from_command(
-                "_CLEAN_NOZZLE_WIPE" if wipe is not None
+                "_CLEAN_NOZZLE_WIPE PASSES=2" if wipe is not None
                 else "CLEAN_NOZZLE MAX_AGE=0")
         finally:
             self.cleaning = False

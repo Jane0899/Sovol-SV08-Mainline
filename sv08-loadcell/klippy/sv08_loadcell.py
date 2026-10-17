@@ -164,17 +164,26 @@ class SV08Loadcell:
         mcu = self.z_endstop.get_mcu()
         pt = mcu.estimated_print_time(self.reactor.monotonic())
         return pt, self.z_endstop.query_endstop(pt)
-    def _wait_release(self, gcmd, max_wait):
+    # Die Wägezelle meldet einen Kontakt erst ~0,2 s später. "Frei" zählt
+    # deshalb erst, wenn es so lange durchgehend frei bleibt
+    LOADCELL_SETTLE = .3
+    def _wait_release(self, gcmd, max_wait, settle=0.):
         self.toolhead.wait_moves()
         start = self.reactor.monotonic()
+        free_since = None
         while 1:
             pt, triggered = self._query()
             now = self.reactor.monotonic()
-            if not triggered:
-                return now - start
-            if now - start > max_wait:
+            if triggered:
+                free_since = None
+            elif free_since is None:
+                free_since = now
+            if free_since is not None and now - free_since >= settle:
+                return free_since - start
+            if now - start > max_wait + settle:
                 raise gcmd.error("Wägezelle nach %.1f s immer noch"
-                                 " ausgelöst" % (max_wait,))
+                                 " ausgelöst - liegt die Düse auf (Filament"
+                                 " an der Düse?)" % (max_wait,))
             self.reactor.pause(now + .001)
     def _lift_to(self, z):
         if self.toolhead.get_position()[2] < z:
@@ -252,7 +261,8 @@ class SV08Loadcell:
             th.manual_move([cx, cy, None], self.travel_speed)
             start = z_probe - gap + clearance
             th.manual_move([None, None, start], 5.)
-            self._wait_release(gcmd, self.release_timeout)
+            self._wait_release(gcmd, self.release_timeout,
+                               self.LOADCELL_SETTLE)
             # 3. Fein: Düse ganz langsam auf die Wägezelle
             pos = th.get_position()
             pos[2] = start - clearance - max_slow
@@ -700,14 +710,14 @@ class SV08Loadcell:
         self.toolhead.manual_move([cx, cy, None], self.travel_speed)
         # einmal zügig aufsetzen, damit die langsamen Messungen nur 1 mm
         # Anfahrt haben
-        self._wait_release(gcmd, 10.)
+        self._wait_release(gcmd, 10., self.LOADCELL_SETTLE)
         z, over, vt = self._tap(gcmd, 1., .3)
         self.toolhead.manual_move([None, None, z + 1.], self.lift_speed)
         rows = []
         for v in self.LOADCELL_SPEEDS:
             trigs = []
             for i in range(8):
-                self._wait_release(gcmd, 10.)
+                self._wait_release(gcmd, 10., self.LOADCELL_SETTLE)
                 z, over, vt = self._tap(gcmd, v, .3)
                 trigs.append(z)
                 self.toolhead.manual_move([None, None, z + 1.],

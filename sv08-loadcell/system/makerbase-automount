@@ -1,0 +1,42 @@
+#!/bin/sh
+# Gehärtete Fassung von Sovols makerbase-automount (USB-Stick-Automount).
+# Vom sv08-loadcell-Installer eingespielt, __UID__/__GID__/__HOME__ werden ersetzt.
+#
+# Entfernt gegenüber dem Werks-Skript (lief beim bloßen Einstecken als root):
+#   - WLAN-Verbindung aus USB/wifi.cfg (nmcli)
+#   - Ausführen von USB/test.sh
+#   - Installation von Sovol_Update_Package*.deb + Reboot
+# Übrig: Stick mounten (noexec), .gcode-Dateien mit Präfix USB- kopieren,
+# beim Abziehen die Kopien entfernen (Verhalten wie im Werks-Skript).
+
+uid="__UID__"
+gid="__GID__"
+mediadir="__HOME__/printer_data/gcodes/USB"
+target_dir="__HOME__/printer_data/gcodes"
+log=/home/mount.log
+prefix="USB-"
+
+dev=/dev/${1##*/}
+
+if ! [ -b "$dev" ]
+then
+	if grep /etc/mtab -qe "^$dev "
+	then
+		rm -f "$target_dir/$prefix"*.gcode
+		umount "$dev"
+		echo "umount $dev success" >> $log
+		rmdir "$mediadir"
+	fi
+	exit 0
+fi
+
+echo "exec mount $1" >> $log
+mkdir -p "$mediadir"
+# uid/gid kennen nur FAT/NTFS/exFAT, ext4 & Co. ohne
+mount -t auto -o uid=$uid,gid=$gid,noexec,nosuid,nodev "$dev" "$mediadir" 2>> $log ||
+	mount -t auto -o noexec,nosuid,nodev "$dev" "$mediadir" 2>> $log || exit 0
+
+for file in "$mediadir"/*.gcode; do
+    [ -f "$file" ] || continue
+    cp "$file" "$target_dir/$prefix$(basename "$file")" 2>> $log
+done

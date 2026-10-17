@@ -8,6 +8,7 @@
 #   1. Prüfen (Klipper-Stack, MCUs mit Klipper-Firmware)
 #   2. Sichern + wegräumen: alte Configs und Sovol-Reste -> ~/printer_data/backup/sv08-loadcell-<Zeit>/
 #   3. Einspielen: Modul (Symlink), Config-Vorlage, sv08-*.cfg (Symlinks), timelapse
+#      (dazu: Sovols USB-Automount härten, falls noch im Werkszustand)
 #   4. Updater: [update_manager sv08-loadcell] in moonraker.conf
 #   5. Klipper + Moonraker neu starten
 #
@@ -120,9 +121,24 @@ if [ $UPDATE_MODE = 0 ]; then
     for f in probe_pressure.py z_offset_calibration.py; do backup "$EXTRAS_DIR/$f"; done
     # Sovol-Reste im Home-Verzeichnis (Werks-Image)
     for f in patch patch.base patch.sh plr.sh plr-old.sh clear_plr.sh sovol_plr_height \
-             get_ip.sh send_ip.py factory_resets.sh restart_firmware.py ttyS3.py; do
+             get_ip.sh send_ip.py factory_resets.sh restart_firmware.py ttyS3.py usbmount; do
         backup "$HOME/$f"
     done
+fi
+
+# Sovols USB-Automount (Werks-Image) führt beim Einstecken eines Sticks als root
+# test.sh aus, verbindet WLAN aus wifi.cfg und installiert .deb-Pakete -> härten
+AUTOMOUNT=/usr/bin/makerbase-automount
+if [ -f "$AUTOMOUNT" ] && grep -qE 'test\.sh|dpkg|nmcli' "$AUTOMOUNT"; then
+    say "Härte Sovols USB-Automount (test.sh, WLAN, .deb-Installation entfernt)"
+    mkdir -p "$BACKUP_DIR/usr/bin"
+    cp "$AUTOMOUNT" "$BACKUP_DIR/usr/bin/makerbase-automount"
+    tmp="$(mktemp)"
+    sed -e "s#__UID__#$(id -u)#; s#__GID__#$(id -g)#; s#__HOME__#$HOME#g" \
+        "$LC_DIR/system/makerbase-automount" > "$tmp"
+    sudo install -m 0755 -o root -g root "$tmp" "$AUTOMOUNT"
+    rm -f "$tmp"
+    echo "   alte Fassung gesichert: $BACKUP_DIR/usr/bin/makerbase-automount"
 fi
 
 # ---------------------------------------------------------------- 3. Einspielen

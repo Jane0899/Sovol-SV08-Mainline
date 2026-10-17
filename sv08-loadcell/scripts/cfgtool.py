@@ -4,6 +4,11 @@
 #       Optionen im Hauptteil, die auch im SAVE_CONFIG-Block stehen, auskommentieren.
 #       Klipper lässt beim Laden den Hauptteil gewinnen - ohne das würden übernommene
 #       Messwerte (position_endstop, z_offset, ...) stillschweigend ignoriert.
+#   cfgtool.py serials printer.cfg
+#       "mcu=<serial>" und "extra_mcu=<serial>" aus einer bestehenden printer.cfg
+#   cfgtool.py fill-template vorlage.cfg ziel.cfg MCU_SERIAL EXTRA_MCU_SERIAL
+#   cfgtool.py moonraker-add moonraker.conf REPO_PATH ORIGIN BRANCH
+#       [update_manager sv08-loadcell] eintragen, falls noch nicht vorhanden
 import re, sys
 
 MARK = "#*# <---------------------- SAVE_CONFIG ---------------------->"
@@ -45,12 +50,54 @@ def dedupe(text):
         out.append(line)
     return "".join(out) + autosave, changed
 
+def serials(text):
+    body, _ = split(text)
+    res, sec = {}, None
+    for line in body.splitlines():
+        m = re.match(r"^\[([^\]]+)\]", line)
+        if m:
+            sec = m.group(1).strip()
+            continue
+        m = re.match(r"^serial\s*[:=]\s*(\S+)", line)
+        if m and sec in ("mcu", "mcu extra_mcu"):
+            res["mcu" if sec == "mcu" else "extra_mcu"] = m.group(1)
+    return res
+
+UPDATE_SECTION = "[update_manager sv08-loadcell]"
+
+def moonraker_add(text, repo, origin, branch):
+    if UPDATE_SECTION in text:
+        return text, False
+    block = ("\n# sv08-loadcell (Wägezellen-Homing, Makros, Config-Vorlage)\n"
+             "%s\ntype: git_repo\npath: %s\norigin: %s\nprimary_branch: %s\n"
+             "managed_services: klipper\n" % (UPDATE_SECTION, repo, origin, branch))
+    return text.rstrip("\n") + "\n" + block, True
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "dedupe-autosave" and len(argv) == 3:
+        path = argv[2]
+        new, changed = dedupe(open(path).read())
+        if changed:
+            open(path, "w").write(new)
+        for c in changed:
+            print("auskommentiert: " + c)
+    elif cmd == "serials" and len(argv) == 3:
+        for k, v in sorted(serials(open(argv[2]).read()).items()):
+            print("%s=%s" % (k, v))
+    elif cmd == "fill-template" and len(argv) == 6:
+        t = open(argv[2]).read()
+        t = t.replace("__MCU_SERIAL__", argv[4])
+        t = t.replace("__EXTRA_MCU_SERIAL__", argv[5])
+        open(argv[3], "w").write(t)
+    elif cmd == "moonraker-add" and len(argv) == 6:
+        new, added = moonraker_add(open(argv[2]).read(), argv[3], argv[4],
+                                   argv[5])
+        if added:
+            open(argv[2], "w").write(new)
+        print("eingetragen" if added else "schon vorhanden")
+    else:
+        sys.exit(__doc__ or "Aufruf siehe Kopf von cfgtool.py")
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] != "dedupe-autosave":
-        sys.exit("Aufruf: cfgtool.py dedupe-autosave printer.cfg")
-    path = sys.argv[2]
-    new, changed = dedupe(open(path).read())
-    if changed:
-        open(path, "w").write(new)
-    for c in changed:
-        print("auskommentiert: " + c)
+    main(sys.argv)

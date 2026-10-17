@@ -90,7 +90,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 ## Wichtig
 
 - **Die induktive Probe nie mit 70 mm/s oder mehr fahren.** Die Z-Motoren verlieren beim abrupten Stopp Schritte, am Referenzgerät waren es 1,67 mm, ohne Fehlermeldung. Der Assistent testet höchstens 50 mm/s und prüft nach jeder Geschwindigkeit, ob Z gewandert ist.
-- **Filament an der Düse** verfälscht das Homing auf der Wägezelle. Deshalb reinigt das erste Homing nach jedem Klipper-Start die Düse automatisch (grob über die Probe homen, `CLEAN_NOZZLE` bei 260 °C, sauber neu homen, dauert ~3 min). Erkennt `LOADCELL_HOME` später einen zu kleinen Abstand Probe/Kontakt, reinigt es ebenfalls und homt neu. Abschalten: `auto_clean: False` unter `[sv08_loadcell]`.
+- **Filament an der Düse** verfälscht das Homing auf der Wägezelle. Der Abstand Probe/Düsenkontakt ist mechanisch fest und hängt nur von der Düsentemperatur ab. Der Assistent misst ihn bei frisch gereinigter Düse warm und heiß und speichert Bezugswert, Temperaturkoeffizient und Toleranz (`contact_gap`, `contact_gap_coeff`, `blob_tolerance`). Liegt ein Homing darunter, reinigt `LOADCELL_HOME` die Düse (`CLEAN_NOZZLE`, 260 °C) und homt neu. Ist die Düse sauber, wird nicht gereinigt. Vor der ersten Kalibrierung sind die Werte unbekannt, dann reinigt das erste Homing nach jedem Klipper-Start (~3 min). Abschalten: `auto_clean: False` unter `[sv08_loadcell]`.
 - `AUTO_Z_OFFSET` bricht den Druck ab, wenn der gemessene Offset mehr als 1 mm von der Kalibrierung abweicht (`max_offset`).
 
 ## Zurück zum alten Stand

@@ -83,6 +83,15 @@ class SV08Loadcell:
         # Filament an der Düse verfälscht das Homing: seit dem Start noch nie
         # gereinigt oder Abstand Probe/Kontakt zu klein -> CLEAN_NOZZLE
         self.auto_clean = config.getboolean('auto_clean', True)
+        # Abstand Probe/Düsenkontakt bei sauberer Düse, vom Assistenten
+        # gemessen: contact_gap bei contact_gap_temp, Änderung pro Kelvin
+        # contact_gap_coeff (die Düse dehnt sich). Liegt ein Homing mehr
+        # als blob_tolerance darunter, hängt etwas an der Düse
+        self.contact_gap = config.getfloat('contact_gap', None)
+        self.contact_gap_temp = config.getfloat('contact_gap_temp', 220.)
+        self.contact_gap_coeff = config.getfloat('contact_gap_coeff', None)
+        self.blob_tolerance = config.getfloat('blob_tolerance', .06,
+                                              above=0.)
         self.cleaning = False
         # AUTO_Z_OFFSET
         self.z_correction = config.getfloat('z_correction', 0.)
@@ -171,6 +180,10 @@ class SV08Loadcell:
     # Die Wägezelle meldet einen Kontakt erst ~0,2 s später. "Frei" zählt
     # deshalb erst, wenn es so lange durchgehend frei bleibt
     LOADCELL_SETTLE = .3
+    # Assistent: Abstand Probe/Kontakt bei so vielen Temperaturen messen,
+    # Mindestspanne für den Temperaturkoeffizienten
+    GAP_SAMPLES = 3
+    GAP_MIN_SPAN = 30.
     def _wait_release(self, gcmd, max_wait, settle=0.):
         self.toolhead.wait_moves()
         start = self.reactor.monotonic()
@@ -231,12 +244,20 @@ class SV08Loadcell:
         rough = gcmd.get_int('ROUGH', 0, minval=0, maxval=1)
         clean = self._clean_macro() if (self.auto_clean
                                         and not self.cleaning) else None
-        if clean is not None and clean.variables.get('last_clean', 0) < 0:
-            gcmd.respond_info("LOADCELL_HOME: seit dem Start noch nicht"
-                              " gereinigt - grob homen, CLEAN_NOZZLE, dann"
-                              " sauber homen")
-            rough = 1
         gap = gcmd.get_float('GAP', self.probe_contact_gap)
+        # Untergrenze für den gemessenen Abstand Probe/Kontakt
+        min_gap, expected = gap, None
+        if (self.contact_gap is not None
+                and self.contact_gap_coeff is not None):
+            expected = self._expected_gap(self._nozzle_temp())
+            min_gap = max(gap, expected - self.blob_tolerance)
+        elif clean is not None and clean.variables.get('last_clean', 0) < 0:
+            # Ohne Bezugsabstand lässt sich Filament an der Düse nicht
+            # sicher erkennen: vor dem ersten Homing reinigen
+            gcmd.respond_info("LOADCELL_HOME: kein contact_gap kalibriert und"
+                              " seit dem Start nicht gereinigt - grob homen,"
+                              " CLEAN_NOZZLE, dann sauber homen")
+            rough = 1
         max_slow = gcmd.get_float('MAX_SLOW_TRAVEL', self.max_slow_travel,
                                   above=0.)
         kstatus = kin.get_status(eventtime)
@@ -267,6 +288,10 @@ class SV08Loadcell:
             pos[2] = z_min
             z_probe = phoming.probing_move(probe_endstop, pos,
                                            coarse_speed)[2]
+            # Anheben für die XY-Fahrt, höchstens bis zur Starthöhe (z_max):
+            # stand der Kopf schon knapp über der Zelle, wäre mehr ausserhalb
+            # des Bereichs - und die Starthöhe war ja frei
+            lift_z = min(z_probe + self.xy_lift, z_max)
             if rough or clean is not None:
                 # Grob-Z aus der Probe: Kontakt bei z_probe - gap angenommen.
                 # gap ist eine Untergrenze, die Düse steht also eher höher
@@ -280,36 +305,47 @@ class SV08Loadcell:
                                       " gehomt (ohne Wägezelle)")
                 return
             # 2. Düse über die Zelle, knapp über erwarteten Kontakt
-            th.manual_move([None, None, z_probe + self.xy_lift],
+            th.manual_move([None, None, lift_z],
                            self.lift_speed)
             th.manual_move([cx, cy, None], self.travel_speed)
             start = z_probe - gap + clearance
             th.manual_move([None, None, start], 5.)
-            self._wait_release(gcmd, self.release_timeout,
-                               self.LOADCELL_SETTLE)
+            try:
+                self._wait_release(gcmd, self.release_timeout,
+                                   self.LOADCELL_SETTLE)
+            except self.printer.command_error as e:
+                # Düse liegt schon an der Startposition auf
+                th.manual_move([None, None, lift_z],
+                               self.lift_speed)
+                if self._clean_allowed(clean):
+                    gcmd.respond_info("LOADCELL_HOME: %s - reinige" % (e,))
+                    self._set_rough_z(rough_shift)
+                    self._run_clean()
+                    return
+                raise
             # 3. Fein: Düse ganz langsam auf die Wägezelle
             pos = th.get_position()
             pos[2] = start - clearance - max_slow
             z_cell = phoming.probing_move(self.z_endstop, pos, speed)[2]
-            # Der Abstand Probe/Düsenkontakt ist mechanisch fest (kalt
-            # ~0,43 mm, heiß ~0,31 mm). Ist er kleiner als erwartet, hat
-            # etwas anderes die Zelle zuerst berührt
-            if z_probe - z_cell < gap:
-                th.manual_move([None, None, z_probe + self.xy_lift],
+            # Der Abstand Probe/Düsenkontakt ist mechanisch fest (nur
+            # temperaturabhängig). Ist er kleiner als erwartet, hat etwas
+            # anderes die Zelle zuerst berührt
+            if z_probe - z_cell < min_gap:
+                th.manual_move([None, None, lift_z],
                                self.lift_speed)
-                age = self._clean_age(clean)
-                if clean is not None and (age is None or age > 60.):
+                if self._clean_allowed(clean):
                     gcmd.respond_info(
                         "LOADCELL_HOME: Abstand Probe/Kontakt %.3f mm, erwartet"
                         " mindestens %.3f mm - Filament an der Düse,"
-                        " reinige" % (z_probe - z_cell, gap))
+                        " reinige" % (z_probe - z_cell, min_gap))
                     self._set_rough_z(rough_shift)
                     self._run_clean()
                     return
                 raise gcmd.error(
                     "LOADCELL_HOME: Abstand Probe/Kontakt %.3f mm, erwartet"
                     " mindestens %.3f mm - hängt Filament an der Düse? Düse"
-                    " reinigen und erneut homen" % (z_probe - z_cell, gap))
+                    " reinigen und erneut homen" % (z_probe - z_cell,
+                                                    min_gap))
             # 4. Z so setzen, dass der Auslösepunkt = position_endstop ist
             pos = th.get_position()
             pos[2] += pos_endstop - z_cell
@@ -320,14 +356,26 @@ class SV08Loadcell:
             kin.clear_homing_state("z")
             raise
         self.last_result['probe_contact_gap'] = z_probe - z_cell
+        self.last_result['probe_contact_gap_temp'] = self._nozzle_temp()
         gcmd.respond_info(
             "LOADCELL_HOME: Probe bei %.4f, Wägezelle bei %.4f -> Abstand"
-            " Probe/Kontakt %.4f mm (konfiguriert %.3f), langsame Anfahrt"
+            " Probe/Kontakt %.4f mm (%s), langsame Anfahrt"
             " %.3f mm mit %.2f mm/s, Z=%.3f gesetzt"
-            % (z_probe, z_cell, z_probe - z_cell, gap, start - z_cell,
-               speed, pos_endstop))
+            % (z_probe, z_cell, z_probe - z_cell,
+               "erwartet %.3f bei %.0f °C" % (expected, self._nozzle_temp())
+               if expected is not None else "mindestens %.3f" % (min_gap,),
+               start - z_cell, speed, pos_endstop))
+    def _nozzle_temp(self):
+        extruder = self.printer.lookup_object('extruder')
+        return extruder.get_status(self.reactor.monotonic())['temperature']
     def _clean_macro(self):
         return self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None)
+    def _expected_gap(self, temp):
+        return self.contact_gap + self.contact_gap_coeff * (
+            temp - self.contact_gap_temp)
+    def _clean_allowed(self, clean):
+        age = self._clean_age(clean) if clean is not None else None
+        return clean is not None and (age is None or age > 60.)
     def _clean_age(self, clean):
         # Sekunden seit der letzten Reinigung, None = noch nie. Direkt nach
         # einer Reinigung nicht noch einmal reinigen (Schleife)
@@ -830,20 +878,82 @@ class SV08Loadcell:
     def _wz_heat(self, gcmd):
         self._prompt_end()
         self._ensure_leveled()
+        points = self.wizard['gap_points'] = []
         if self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None):
+            # endet mit LOADCELL_HOME bei sauberer, noch warmer Düse
             self._run("CLEAN_NOZZLE MAX_AGE=0")
+            self._add_gap_point()
+        # Abstand Probe/Kontakt warm (nach dem Reinigen) und heiß messen:
+        # ergibt Bezugswert und Temperaturkoeffizient dieses Druckers
+        while len(points) < self.GAP_SAMPLES:
+            self._run("LOADCELL_HOME")
+            self._add_gap_point()
         self._run("M109 S%d" % (self.wizard['temp'],))
+        for i in range(self.GAP_SAMPLES):
+            self._run("LOADCELL_HOME")
+            self._add_gap_point()
         self._next("5. Düse heiß", [
-            "Düse sauber und auf %d °C." % (self.wizard['temp'],),
+            "Düse sauber und auf %d °C. Abstand Probe/Kontakt gemessen bei"
+            " %s °C." % (self.wizard['temp'], ", ".join(
+                "%.0f" % (t,) for t, g in points)),
             "Weiter: Z-Nullpunkt messen."], 'ZOFFSET')
+    def _add_gap_point(self):
+        r = self.last_result
+        if 'probe_contact_gap' in r:
+            self.wizard.setdefault('gap_points', []).append(
+                (r['probe_contact_gap_temp'], r['probe_contact_gap']))
+    def _fit_gap(self, gcmd):
+        # Gerade gap = a + b * (T - Drucktemperatur) durch die Messpunkte
+        pts = self.wizard.get('gap_points', [])
+        tref = self.wizard['temp']
+        temps = [t for t, g in pts]
+        if len(pts) < 3 or max(temps) - min(temps) < self.GAP_MIN_SPAN:
+            return None
+        n = float(len(pts))
+        mx = sum(t - tref for t, g in pts) / n
+        my = sum(g for t, g in pts) / n
+        b = (sum((t - tref - mx) * (g - my) for t, g in pts)
+             / sum((t - tref - mx) ** 2 for t, g in pts))
+        a = my - b * mx
+        sd = math.sqrt(sum((g - a - b * (t - tref)) ** 2 for t, g in pts)
+                       / max(1., n - 2.))
+        return a, b, sd
     # 6. Z-Nullpunkt
     def _wz_zoffset(self, gcmd):
         self._prompt_end()
         self._ensure_leveled()
         self._run("AUTO_Z_OFFSET MAX_OFFSET=5")
+        self._add_gap_point()
+        fit = self._fit_gap(gcmd)
         gap = self.last_result.get('probe_contact_gap')
-        if gap is not None:
-            # bei Drucktemperatur gemessen, mit Reserve
+        if fit is not None and fit[1] <= 0.:
+            a, b, sd = fit
+            self.contact_gap, self.contact_gap_coeff = a, b
+            self.contact_gap_temp = float(self.wizard['temp'])
+            self.blob_tolerance = max(.04, round(5. * sd, 3))
+            # Startpunkt der Feinannäherung: kleinster zu erwartender
+            # Abstand (Düse bei 300 °C am längsten) mit Reserve
+            self.probe_contact_gap = max(0., round(
+                self._expected_gap(300.) - .1, 2))
+            self._set(self.name, 'contact_gap', "%.4f" % (a,))
+            self._set(self.name, 'contact_gap_temp', "%.0f"
+                      % (self.contact_gap_temp,))
+            self._set(self.name, 'contact_gap_coeff', "%.6f" % (b,))
+            self._set(self.name, 'blob_tolerance', "%.3f"
+                      % (self.blob_tolerance,))
+            self._set(self.name, 'probe_contact_gap',
+                      "%.2f" % (self.probe_contact_gap,))
+            gcmd.respond_info(
+                "Abstand Probe/Kontakt: %.4f mm bei %d °C, %.6f mm/K,"
+                " Streuung %.4f mm -> Filament-Erkennung ab %.3f mm"
+                " Abweichung" % (a, self.wizard['temp'], b, sd,
+                                 self.blob_tolerance))
+        elif gap is not None:
+            # Ohne Temperaturmodell: nur Startpunkt, Filament-Erkennung
+            # bleibt aus (vor dem ersten Homing wird gereinigt)
+            gcmd.respond_info("Abstand Probe/Kontakt: zu wenige Messpunkte"
+                              " oder Temperaturspanne < %.0f K - keine"
+                              " Filament-Erkennung" % (self.GAP_MIN_SPAN,))
             self.probe_contact_gap = max(0., round(gap - .25, 2))
             self._set(self.name, 'probe_contact_gap',
                       "%.2f" % (self.probe_contact_gap,))

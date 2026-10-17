@@ -6,7 +6,7 @@ Erweiterung zu dieser Anleitung für SV08 mit **Original-Hardware**: induktive P
 
 - **Z-Homing auf der Wägezelle (`LOADCELL_HOME`)**: Die induktive Probe fährt mit 30 mm/s schnell über die Wägezelle, danach setzt die Düse mit 0,1 mm/s auf. Wiederholgenauigkeit ca. **0,006 mm**.
 - **Automatischer Z-Offset vor jedem Druck (`AUTO_Z_OFFSET`)**: Die Düse auf der Wägezelle ist die Z-Referenz. Die induktive Probe misst über der Zelle und am Bett direkt davor. Daraus ergibt sich der Offset. Gemessen wird bei Drucktemperatur, weil sich die Düse ausdehnt.
-- **Kalibrierungs-Assistent (`CALIBRATE_SV08`)**: Dialoge in Mainsail führen durch Sensor-Check, automatische Messreihen, Z-Nullpunkt, Papiertest und Input Shaper. Die Ergebnisse landen per `SAVE_CONFIG` in der `printer.cfg`.
+- **Kalibrierungs-Assistent (`CALIBRATE_SV08`)**: Dialoge in Mainsail führen durch Sensor-Check, automatische Messreihen, Z-Nullpunkt, Papiertest (bei einer Nachkalibrierung überspringbar) und Input Shaper. Die Ergebnisse landen per `SAVE_CONFIG` in der `printer.cfg`.
 - **Erprobte Config** vom Referenzgerät, dazu Makros: Motoren bleiben nach dem Druck an und gehen nach 10 min Leerlauf aus. Homing und QGL laufen nur, wenn nötig. Außerdem `M600`, Abluftlüfter (`M106 P3`) und getrennte Bauteillüfter.
 - **Updates über Mainsail** (Moonraker Update-Manager). Der Updater folgt `main`, dort liegt nur der freigegebene Stand. Entwickelt wird im Branch `loadcell-homing`.
 

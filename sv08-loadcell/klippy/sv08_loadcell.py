@@ -790,6 +790,8 @@ class SV08Loadcell:
                         % (a,), "secondary"))
         btn.append(("Kratzt leicht - speichern", "CALIBRATE_SV08"
                     " STEP=PAPER_SAVE", "primary"))
+        btn.append(("Überspringen (Korrektur behalten)", "CALIBRATE_SV08"
+                    " STEP=PAPER_SKIP", "secondary"))
         self._prompt("7. Papiertest", [
             "Papier unter die Düse legen (Vorsicht, heiß).",
             "Mit den Knöpfen absenken, bis das Papier beim Hin- und"
@@ -810,13 +812,18 @@ class SV08Loadcell:
         self._set(self.name, 'z_correction', "%.4f" % (corr,))
         self._set('stepper_z', 'position_endstop', "%.4f" % (new_endstop,))
         self.wizard['paper'] = (bed, corr, new_endstop)
+        self._paper_done("Korrektur Zelle/PEI: %.3f mm, Z-Nullpunkt"
+                         " (position_endstop): %.3f mm." % (corr, new_endstop))
+    def _wz_paper_skip(self, gcmd):
+        self._paper_done("Papiertest übersprungen, Korrektur Zelle/PEI bleibt"
+                         " %.3f mm." % (self.z_correction,))
+    def _paper_done(self, result):
         self._run("G91")
         self._run("G0 Z10 F600")
         self._run("G90")
         self._run("M104 S0")
         self._prompt("7. Papiertest", [
-            "Korrektur Zelle/PEI: %.3f mm, Z-Nullpunkt (position_endstop):"
-            " %.3f mm." % (corr, new_endstop),
+            result,
             "Weiter: Input Shaper messen (ADXL im Druckkopf, ca. 3 Minuten,"
             " laut) - oder überspringen."],
             [("Input Shaper messen", "CALIBRATE_SV08 STEP=SHAPER",

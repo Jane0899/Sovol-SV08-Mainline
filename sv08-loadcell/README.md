@@ -51,7 +51,7 @@ Der Installer:
 1. prüft Klipper, Moonraker, Mainsail und die beiden MCUs,
 2. **sichert** alle alten Configs und Sovol-Reste nach `~/printer_data/backup/sv08-loadcell-<Datum>/` und räumt sie dann weg (zusätzlich gibt es ein Archiv des kompletten Config-Ordners),
 3. spielt das Modul und die Configs ein. Die MCU-Seriennummern liest er aus der alten `printer.cfg` oder fragt nach,
-   **härtet Sovols USB-Automount** vom Werks-Image: Das führte beim bloßen Einstecken eines Sticks als root `test.sh` aus, verband sich mit dem WLAN aus `wifi.cfg` und installierte `.deb`-Pakete samt Neustart. Übrig bleibt: Stick mounten (ohne Ausführrechte) und `.gcode`-Dateien als `USB-…` in die Dateiliste kopieren,
+   **härtet Sovols USB-Automount** vom Werks-Image: Das führte beim bloßen Einstecken eines Sticks als root `test.sh` aus, verband sich mit dem WLAN aus `wifi.cfg` und installierte `.deb`-Pakete samt Neustart. Übrig bleibt: Stick mounten (ohne Ausführrechte) und `.gcode`-Dateien als `USB-…` auf den Drucker **verschieben**. Sie bleiben nach dem Abziehen in der Dateiliste, der Stick ist danach leer,
 4. trägt den Updater in `moonraker.conf` ein,
 5. startet Klipper und Moonraker neu.
 

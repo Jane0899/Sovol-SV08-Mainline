@@ -6,8 +6,8 @@
 #   - WLAN-Verbindung aus USB/wifi.cfg (nmcli)
 #   - Ausführen von USB/test.sh
 #   - Installation von Sovol_Update_Package*.deb + Reboot
-# Übrig: Stick mounten (noexec), .gcode-Dateien mit Präfix USB- kopieren,
-# beim Abziehen die Kopien entfernen (Verhalten wie im Werks-Skript).
+# Übrig: Stick mounten (noexec) und .gcode-Dateien mit Präfix USB- auf den
+# Drucker verschieben. Sie bleiben nach dem Abziehen erhalten, der Stick ist danach leer.
 
 uid="__UID__"
 gid="__GID__"
@@ -22,7 +22,6 @@ if ! [ -b "$dev" ]
 then
 	if grep /etc/mtab -qe "^$dev "
 	then
-		rm -f "$target_dir/$prefix"*.gcode
 		umount "$dev"
 		echo "umount $dev success" >> $log
 		rmdir "$mediadir"
@@ -38,5 +37,5 @@ mount -t auto -o uid=$uid,gid=$gid,noexec,nosuid,nodev "$dev" "$mediadir" 2>> $l
 
 for file in "$mediadir"/*.gcode; do
     [ -f "$file" ] || continue
-    cp "$file" "$target_dir/$prefix$(basename "$file")" 2>> $log
+    mv "$file" "$target_dir/$prefix$(basename "$file")" 2>> $log
 done

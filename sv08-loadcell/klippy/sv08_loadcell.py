@@ -242,7 +242,9 @@ class SV08Loadcell:
         clearance = gcmd.get_float('CLEARANCE', self.home_clearance,
                                    minval=0.)
         rough = gcmd.get_int('ROUGH', 0, minval=0, maxval=1)
-        clean = self._clean_macro() if (self.auto_clean
+        auto_clean = gcmd.get_int('AUTO_CLEAN', int(self.auto_clean),
+                                  minval=0, maxval=1)
+        clean = self._clean_macro() if (auto_clean
                                         and not self.cleaning) else None
         gap = gcmd.get_float('GAP', self.probe_contact_gap)
         # Untergrenze für den gemessenen Abstand Probe/Kontakt
@@ -392,11 +394,17 @@ class SV08Loadcell:
         th.set_position(pos, homing_axes="z")
         th.manual_move([None, None, pos[2] + self.safe_z], self.lift_speed)
     def _run_clean(self):
-        # CLEAN_NOZZLE homt am Ende mit LOADCELL_HOME neu, hier ohne erneute
-        # Reinigung (sonst Schleife)
+        # Nur das Wischen, nicht CLEAN_NOZZLE: das beginnt mit _CG28, und
+        # LOADCELL_HOME läuft oft gerade aus _CG28 heraus (START_PRINT) -
+        # Klipper bricht rekursive Makros ab. Das Wischen homt am Ende mit
+        # LOADCELL_HOME AUTO_CLEAN=0 neu
+        wipe = self.printer.lookup_object('gcode_macro _CLEAN_NOZZLE_WIPE',
+                                          None)
         self.cleaning = True
         try:
-            self.gcode.run_script_from_command("CLEAN_NOZZLE MAX_AGE=0")
+            self.gcode.run_script_from_command(
+                "_CLEAN_NOZZLE_WIPE" if wipe is not None
+                else "CLEAN_NOZZLE MAX_AGE=0")
         finally:
             self.cleaning = False
     # Automatischer Z-Offset
@@ -811,6 +819,12 @@ class SV08Loadcell:
             sd, v, r, rng = min(results)
         self._set('probe', 'speed', "%.0f" % (v,))
         self._set('probe', 'sample_retract_dist', "%.0f" % (r,))
+        # Mesh: zwischen den Punkten auf Auslösehöhe + Rückzug, damit jeder
+        # Punkt mit demselben Anfahrweg misst wie die Messreihe
+        pz = self._probe()[0].get_offsets()[2]
+        if self.printer.lookup_object('bed_mesh', None) is not None:
+            self._set('bed_mesh', 'horizontal_move_z',
+                      "%.0f" % (math.ceil(pz + r),))
         self.wizard['probe'] = (v, r, rng, sd)
         self._next("3. Messreihe induktive Probe", [
             "Bester Wert: %.0f mm/s mit %.0f mm Rückzug (range %.4f, stddev"

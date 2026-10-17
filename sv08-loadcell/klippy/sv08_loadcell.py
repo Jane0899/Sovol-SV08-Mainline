@@ -267,6 +267,16 @@ class SV08Loadcell:
             pos = th.get_position()
             pos[2] = start - clearance - max_slow
             z_cell = phoming.probing_move(self.z_endstop, pos, speed)[2]
+            # Der Abstand Probe/Düsenkontakt ist mechanisch fest (kalt
+            # ~0,43 mm, heiß ~0,31 mm). Ist er kleiner als erwartet, hat
+            # etwas anderes die Zelle zuerst berührt
+            if z_probe - z_cell < gap:
+                th.manual_move([None, None, z_probe + self.xy_lift],
+                               self.lift_speed)
+                raise gcmd.error(
+                    "LOADCELL_HOME: Abstand Probe/Kontakt %.3f mm, erwartet"
+                    " mindestens %.3f mm - hängt Filament an der Düse? Düse"
+                    " reinigen und erneut homen" % (z_probe - z_cell, gap))
             # 4. Z so setzen, dass der Auslösepunkt = position_endstop ist
             pos = th.get_position()
             pos[2] += pos_endstop - z_cell

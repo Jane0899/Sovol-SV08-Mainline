@@ -90,6 +90,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 ## Wichtig
 
 - **Die induktive Probe nie mit 70 mm/s oder mehr fahren.** Die Z-Motoren verlieren beim abrupten Stopp Schritte, am Referenzgerät waren es 1,67 mm, ohne Fehlermeldung. Der Assistent testet höchstens 50 mm/s und prüft nach jeder Geschwindigkeit, ob Z gewandert ist.
+- **Filament an der Düse** verfälscht das Homing auf der Wägezelle. `LOADCELL_HOME` erkennt das am zu kleinen Abstand Probe/Kontakt und bricht ab, dann Düse reinigen und neu homen.
 - `AUTO_Z_OFFSET` bricht den Druck ab, wenn der gemessene Offset mehr als 1 mm von der Kalibrierung abweicht (`max_offset`).
 
 ## Zurück zum alten Stand

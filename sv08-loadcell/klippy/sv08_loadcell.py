@@ -461,7 +461,16 @@ class SV08Loadcell:
     PROBE_SPEEDS = (10., 20., 30., 50.)
     PROBE_RETRACTS = (2., 5., 10.)
     PROBE_MAX_OVERTRAVEL = .15
-    DRIFT_LIMIT = .01
+    # gut genug: unter dieser Standardabweichung gewinnt die schnellste
+    # Einstellung (Zeit pro Messung), nicht die genaueste
+    PROBE_TARGET_SD = .002
+    # Leerlauf-Timeout während des Assistenten (Wartezeit auf den Nutzer,
+    # z.B. Papiertest bei heißer Düse)
+    WIZARD_IDLE_TIMEOUT = 1800.
+    # Schrittverlust erkennen: ein Z-Vollschritt sind beim SV08 0,03 mm, ein
+    # abgewürgter Motor springt meist um 4 Vollschritte (0,12 mm). Rauschen und
+    # Wärmedrift der Probe liegen bei ~0,01 mm
+    DRIFT_LIMIT = .05
     LOADCELL_SPEEDS = (.1, .25, .5, 1.)
     LOADCELL_TARGET_RANGE = .01
     def _prompt(self, title, lines, buttons=(), footer=()):
@@ -538,6 +547,10 @@ class SV08Loadcell:
             raise
     def _wz_start(self, gcmd):
         self.wizard = {'temp': self.wizard.get('temp', 220)}
+        idle = self.printer.lookup_object('idle_timeout', None)
+        if idle is not None:
+            self.wizard['idle_timeout'] = idle.idle_timeout
+            self._run("SET_IDLE_TIMEOUT TIMEOUT=%d" % (self.WIZARD_IDLE_TIMEOUT,))
         self._next("SV08 Kalibrierung", [
             "Der Assistent misst deinen Drucker ein und speichert die Werte"
             " am Ende per SAVE_CONFIG:",
@@ -549,8 +562,13 @@ class SV08Loadcell:
             " Blatt Papier bereitlegen.",
             "Andere Drucktemperatur: CALIBRATE_SV08 TEMP=240"], 'SENSOR',
             "Start")
+    def _restore_idle_timeout(self):
+        if 'idle_timeout' in self.wizard:
+            self._run("SET_IDLE_TIMEOUT TIMEOUT=%d"
+                      % (self.wizard.pop('idle_timeout'),))
     def _wz_cancel(self, gcmd):
         self._prompt_end()
+        self._restore_idle_timeout()
         self._run("TURN_OFF_HEATERS")
         gcmd.respond_info("CALIBRATE_SV08 abgebrochen. Bereits übernommene"
                           " Werte werden erst mit SAVE_CONFIG gespeichert.")
@@ -657,8 +675,14 @@ class SV08Loadcell:
                 stop = True
         if not results:
             raise gcmd.error("Keine brauchbare Probe-Einstellung gefunden")
-        results.sort()
-        sd, v, r, rng = results[0]
+        # Zeit pro Messung: Rückzug hoch (lift_speed 25) und wieder runter
+        def cycle(x):
+            return x[2] / x[1] + x[2] / 25.
+        good = [x for x in results if x[0] <= self.PROBE_TARGET_SD]
+        if good:
+            sd, v, r, rng = min(good, key=cycle)
+        else:
+            sd, v, r, rng = min(results)
         self._set('probe', 'speed', "%.0f" % (v,))
         self._set('probe', 'sample_retract_dist', "%.0f" % (r,))
         self.wizard['probe'] = (v, r, rng, sd)
@@ -807,6 +831,7 @@ class SV08Loadcell:
         self.wizard['shaper'] = True
         self._wz_finish(gcmd)
     def _wz_finish(self, gcmd):
+        self._restore_idle_timeout()
         lines = ["Übernommen (wird mit SAVE_CONFIG gespeichert):"]
         lines += self.wizard.get('saved', [])
         if self.wizard.get('shaper'):

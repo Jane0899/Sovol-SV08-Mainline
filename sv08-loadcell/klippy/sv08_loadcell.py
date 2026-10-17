@@ -7,6 +7,9 @@
 #                    Düse ganz langsam (0,1 mm/s) auf die Zelle
 #   AUTO_Z_OFFSET  - Düse auf Zelle (= Z-Referenz), induktive Probe über der
 #                    Zelle und am Bett -> SET_GCODE_OFFSET Z
+#   SV08_CALIBRATE - Assistent (Mainsail-Dialoge): Sensor-Check, Messreihen
+#                    für Probe und Wägezelle, Z-Nullpunkt, Papiertest,
+#                    Input Shaper - Ergebnisse per SAVE_CONFIG
 #
 # Copyright (C) 2026  Jane0899
 #
@@ -82,6 +85,7 @@ class SV08Loadcell:
         self.max_offset = config.getfloat('max_offset', 1., above=0.)
         self.last_offset = None
         self.last_result = {}
+        self.wizard = {'temp': 220}
         self.z_endstop = None
         self.toolhead = None
         self.printer.register_event_handler("klippy:connect",
@@ -104,7 +108,9 @@ class SV08Loadcell:
                  "Abklingzeit der Wägezelle nach dem Antippen messen"),
                 ('PROBE_OVERTRAVEL',
                  "Nachlauf der induktiven Probe nach dem Auslösen messen"),
-                ('RETRACT_TIME', "Dauer einer Z-Fahrt berechnen")]:
+                ('RETRACT_TIME', "Dauer einer Z-Fahrt berechnen"),
+                ('SV08_CALIBRATE',
+                 "Kalibrierungs-Assistent (Mainsail-Dialoge)")]:
             self.gcode.register_command(cmd, getattr(self, 'cmd_' + cmd),
                                         desc=desc)
     def _handle_connect(self):
@@ -444,6 +450,372 @@ class SV08Loadcell:
                           " gehalten bei Z=%.4f, Nachlauf %.4f mm"
                           " (v_trig %.1f mm/s)"
                           % (speed, trig[2], halt, trig[2] - halt, v_trig))
+
+    # ------------------------------------------------------------------
+    # Kalibrierungs-Assistent
+    # ------------------------------------------------------------------
+    # Grenzen der automatischen Messreihen (aus der Testreihe am
+    # Referenzgerät): induktive Probe nie >= 70 mm/s (Z verliert Schritte),
+    # Wägezelle nie schneller als 1 mm/s (reagiert ~0,15 s verzögert, die
+    # Düse drückt sonst zu weit nach)
+    PROBE_SPEEDS = (10., 20., 30., 50.)
+    PROBE_RETRACTS = (2., 5., 10.)
+    PROBE_MAX_OVERTRAVEL = .15
+    DRIFT_LIMIT = .01
+    LOADCELL_SPEEDS = (.1, .25, .5, 1.)
+    LOADCELL_TARGET_RANGE = .01
+    def _prompt(self, title, lines, buttons=(), footer=()):
+        r = self.gcode.respond_raw
+        r("// action:prompt_end")
+        r("// action:prompt_begin %s" % (title,))
+        for line in lines:
+            r("// action:prompt_text %s" % (line,))
+        for label, cmd, color in buttons:
+            r("// action:prompt_button %s|%s|%s" % (label, cmd, color))
+        for label, cmd, color in footer:
+            r("// action:prompt_footer_button %s|%s|%s" % (label, cmd, color))
+        r("// action:prompt_show")
+    def _prompt_end(self):
+        self.gcode.respond_raw("// action:prompt_end")
+    def _next(self, title, lines, step, label="Weiter"):
+        self._prompt(title, lines,
+                     [(label, "SV08_CALIBRATE STEP=%s" % (step,), "primary")],
+                     [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+    def _run(self, script):
+        self.gcode.run_script_from_command(script)
+    def _set(self, section, option, value):
+        self.printer.lookup_object('configfile').set(section, option, value)
+        self.wizard.setdefault('saved', []).append(
+            "[%s] %s = %s" % (section, option, value))
+    def _ensure_leveled(self):
+        homed = self._homed()
+        if 'x' not in homed or 'y' not in homed or 'z' not in homed:
+            self._run("G28")
+        qgl = self.printer.lookup_object('quad_gantry_level', None)
+        if qgl is not None and not qgl.get_status(
+                self.reactor.monotonic()).get('applied'):
+            self._run("QUAD_GANTRY_LEVEL")
+            self._run("G28 Z")
+    def _probe_series(self, speed, retract, samples, lift_speed=25.):
+        # Induktive Probe an der aktuellen XY-Position, wie PROBE_ACCURACY,
+        # zusätzlich mit Nachlauf (Auslöse- minus Halteposition)
+        probe, endstop = self._probe()
+        phoming = self.printer.lookup_object('homing')
+        trigs, overs = [], []
+        for i in range(samples):
+            pos = self.toolhead.get_position()
+            pos[2] = self._z_min()
+            trig = phoming.probing_move(endstop, pos, speed)[2]
+            overs.append(trig - self.toolhead.get_position()[2])
+            trigs.append(trig)
+            self.toolhead.manual_move([None, None, trig + retract],
+                                      lift_speed)
+        return trigs, overs
+    def _goto_bed_point(self, z=10.):
+        probe, _ = self._probe()
+        px, py, pz = probe.get_offsets()
+        self._lift_to(z)
+        self.toolhead.manual_move([self.bed_xy[0] - px, self.bed_xy[1] - py,
+                                   None], self.travel_speed)
+        self.toolhead.manual_move([None, None, z], self.lift_speed)
+    def cmd_SV08_CALIBRATE(self, gcmd):
+        step = gcmd.get('STEP', 'START').upper()
+        if 'TEMP' in gcmd.get_command_parameters():
+            self.wizard['temp'] = gcmd.get_int('TEMP', 220, minval=150,
+                                               maxval=300)
+        handler = getattr(self, '_wz_' + step.lower(), None)
+        if handler is None:
+            raise gcmd.error("SV08_CALIBRATE: unbekannter Schritt %s" % step)
+        try:
+            handler(gcmd)
+        except self.printer.command_error as e:
+            self._prompt("SV08 Kalibrierung - Fehler",
+                         ["Schritt %s fehlgeschlagen:" % (step,), str(e)],
+                         [("Schritt wiederholen",
+                           "SV08_CALIBRATE STEP=%s" % (step,), "warning")],
+                         [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL",
+                           "error")])
+            raise
+    def _wz_start(self, gcmd):
+        self.wizard = {'temp': self.wizard.get('temp', 220)}
+        self._next("SV08 Kalibrierung", [
+            "Der Assistent misst deinen Drucker ein und speichert die Werte"
+            " am Ende per SAVE_CONFIG:",
+            "1. Sensor-Check  2. Homing + QGL  3. Messreihe induktive Probe"
+            "  4. Messreihe Wägezelle  5. Düse reinigen + heizen"
+            " (%d °C)  6. Z-Nullpunkt  7. Papiertest  8. Input Shaper"
+            % (self.wizard['temp'],),
+            "Dauer ca. 30-40 Minuten. Bett leer räumen, Düse sauber, ein"
+            " Blatt Papier bereitlegen.",
+            "Andere Drucktemperatur: SV08_CALIBRATE TEMP=240"], 'SENSOR',
+            "Start")
+    def _wz_cancel(self, gcmd):
+        self._prompt_end()
+        self._run("TURN_OFF_HEATERS")
+        gcmd.respond_info("SV08_CALIBRATE abgebrochen. Bereits übernommene"
+                          " Werte werden erst mit SAVE_CONFIG gespeichert.")
+    # 1. Sensor-Check
+    def _wz_sensor(self, gcmd):
+        _, triggered = self._query()
+        probe, endstop = self._probe()
+        p_trig = endstop.query_endstop(self.toolhead.get_last_move_time())
+        if triggered:
+            raise gcmd.error("Wägezelle meldet ohne Berührung 'ausgelöst' -"
+                             " Pin/Polarität ([stepper_z] endstop_pin) prüfen"
+                             " oder Düse liegt auf der Zelle")
+        if p_trig:
+            raise gcmd.error("Induktive Probe meldet 'ausgelöst' - Kopf zu"
+                             " tief oder Probe defekt")
+        self._prompt("1. Sensor-Check", [
+            "Wägezelle und Probe melden in Ruhe 'frei'.",
+            "Drücke jetzt die Wägezelle hinten rechts (der Stift, auf den die"
+            " Düse beim Homing drückt) mit dem Finger, halte sie gedrückt und"
+            " klicke dabei auf 'Jetzt gedrückt'."],
+            [("Jetzt gedrückt", "SV08_CALIBRATE STEP=SENSOR_PRESSED",
+              "primary")],
+            [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+    def _wz_sensor_pressed(self, gcmd):
+        _, triggered = self._query()
+        if not triggered:
+            self._prompt("1. Sensor-Check", [
+                "Die Wägezelle hat NICHT ausgelöst.",
+                "Fester drücken und nochmal versuchen. Bleibt es so: Kabel"
+                " und [stepper_z] endstop_pin (^!PE12) prüfen."],
+                [("Nochmal", "SV08_CALIBRATE STEP=SENSOR_PRESSED",
+                  "warning")],
+                [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+            return
+        self._next("1. Sensor-Check", [
+            "Wägezelle funktioniert.",
+            "Weiter: Homing und QGL. Der Drucker bewegt sich jetzt - Hände"
+            " weg."], 'HOME')
+    # 2. Homing + QGL
+    def _wz_home(self, gcmd):
+        self._prompt_end()
+        self._run("G28")
+        self._run("QUAD_GANTRY_LEVEL")
+        self._run("G28 Z")
+        self._next("2. Homing + QGL", [
+            "Erledigt. Abstand Probe/Kontakt beim Homing: %.3f mm."
+            % (self.last_result.get('probe_contact_gap', 0.),),
+            "Weiter: Messreihe der induktiven Probe (Geschwindigkeit x"
+            " Rückzug, ca. 5-8 Minuten)."], 'PROBE_TUNE')
+    # 3. Messreihe induktive Probe
+    def _wz_probe_tune(self, gcmd):
+        self._prompt_end()
+        self._ensure_leveled()
+        accel = self._z_accel()
+        vmax = self._settings()['printer'].get('max_z_velocity', 100.)
+        self._goto_bed_point()
+        # Nachlauf je Geschwindigkeit -> Obergrenze
+        cap = 0.
+        for v in self.PROBE_SPEEDS:
+            if v > vmax:
+                break
+            self.toolhead.manual_move([None, None, 10.], self.lift_speed)
+            trigs, overs = self._probe_series(v, 5., 1)
+            gcmd.respond_info("Probe-Nachlauf bei %.0f mm/s: %.4f mm"
+                              % (v, overs[0]))
+            if overs[0] > self.PROBE_MAX_OVERTRAVEL:
+                break
+            cap = v
+        if not cap:
+            raise gcmd.error("Probe läuft schon bei %.0f mm/s zu weit nach"
+                             % (self.PROBE_SPEEDS[0],))
+        def reference():
+            self.toolhead.manual_move([None, None, 10.], self.lift_speed)
+            t, o = self._probe_series(5., 5., 3)
+            return sum(t) / len(t)
+        ref = reference()
+        results = []
+        stop = False
+        for v in self.PROBE_SPEEDS:
+            if v > cap or stop:
+                break
+            for r in self.PROBE_RETRACTS:
+                if trigger_speed(r, v, accel) < .95 * v:
+                    gcmd.respond_info("%.0f mm/s mit %.0f mm Rückzug"
+                                      " übersprungen (wird nicht erreicht)"
+                                      % (v, r))
+                    continue
+                self.toolhead.manual_move([None, None, 10.], self.lift_speed)
+                trigs, overs = self._probe_series(v, r, 10)
+                mn, mx, rng, avg, med, sd = stats(trigs)
+                results.append((sd, v, r, rng))
+                gcmd.respond_info("Probe %.0f mm/s, Rückzug %.0f mm: range"
+                                  " %.4f, stddev %.4f" % (v, r, rng, sd))
+            drift = reference() - ref
+            gcmd.respond_info("Drift-Check nach %.0f mm/s: %+.4f mm"
+                              % (v, drift))
+            if abs(drift) > self.DRIFT_LIMIT:
+                # Z hat Schritte verloren: diese Geschwindigkeit verwerfen,
+                # neu homen + leveln, nicht schneller testen
+                results = [x for x in results if x[1] < v]
+                self._run("M84")
+                self._ensure_leveled()
+                self._goto_bed_point()
+                stop = True
+        if not results:
+            raise gcmd.error("Keine brauchbare Probe-Einstellung gefunden")
+        results.sort()
+        sd, v, r, rng = results[0]
+        self._set('probe', 'speed', "%.0f" % (v,))
+        self._set('probe', 'sample_retract_dist', "%.0f" % (r,))
+        self.wizard['probe'] = (v, r, rng, sd)
+        self._next("3. Messreihe induktive Probe", [
+            "Bester Wert: %.0f mm/s mit %.0f mm Rückzug (range %.4f, stddev"
+            " %.4f mm). Wird mit SAVE_CONFIG gespeichert." % (v, r, rng, sd),
+            "Weiter: Messreihe der Wägezelle (ca. 5 Minuten)."],
+            'LOADCELL_TUNE')
+    # 4. Messreihe Wägezelle
+    def _wz_loadcell_tune(self, gcmd):
+        self._prompt_end()
+        self._ensure_leveled()
+        cx, cy = self.loadcell_xy
+        self._lift_to(self.safe_z)
+        self.toolhead.manual_move([cx, cy, None], self.travel_speed)
+        # einmal zügig aufsetzen, damit die langsamen Messungen nur 1 mm
+        # Anfahrt haben
+        self._wait_release(gcmd, 10.)
+        z, over, vt = self._tap(gcmd, 1., .3)
+        self.toolhead.manual_move([None, None, z + 1.], self.lift_speed)
+        rows = []
+        for v in self.LOADCELL_SPEEDS:
+            trigs = []
+            for i in range(8):
+                self._wait_release(gcmd, 10.)
+                z, over, vt = self._tap(gcmd, v, .3)
+                trigs.append(z)
+                self.toolhead.manual_move([None, None, z + 1.],
+                                          self.lift_speed)
+            mn, mx, rng, avg, med, sd = stats(trigs)
+            rows.append((v, rng, sd, avg))
+            gcmd.respond_info("Wägezelle %.2f mm/s: range %.4f, stddev %.4f,"
+                              " Mittel %.4f" % (v, rng, sd, avg))
+        # Verzögerung = Steigung der mittleren Auslösehöhe über der
+        # Geschwindigkeit, Messtakt ~ range / v
+        n = len(rows)
+        mv = sum(r[0] for r in rows) / n
+        ma = sum(r[3] for r in rows) / n
+        slope = (sum((r[0] - mv) * (r[3] - ma) for r in rows)
+                 / sum((r[0] - mv) ** 2 for r in rows))
+        latency = -slope
+        period = sorted(r[1] / r[0] for r in rows)[n // 2]
+        ok = [r for r in rows if r[1] <= self.LOADCELL_TARGET_RANGE]
+        speed = max(r[0] for r in ok) if ok else self.LOADCELL_SPEEDS[0]
+        # Abklingzeit
+        self.toolhead.manual_move([None, None, self.toolhead.get_position()[2]
+                                   + 4.], self.lift_speed)
+        self._run("LOADCELL_RELEASE_TIME SPEED=0.5 RETRACT=2 REPEAT=3")
+        release = self.last_result.get('release_time_max', 1.)
+        timeout = max(2., 3. * release)
+        self.home_speed = speed
+        self.release_timeout = timeout
+        self._set(self.name, 'home_speed', "%.2f" % (speed,))
+        self._set(self.name, 'release_timeout', "%.1f" % (timeout,))
+        self.wizard['loadcell'] = (speed, latency, period, release)
+        self._next("4. Messreihe Wägezelle", [
+            "Verzögerung ~%.2f s, Messtakt ~%.0f ms, Abklingzeit %.2f s."
+            % (latency, period * 1000., release),
+            "Feinannäherung: %.2f mm/s (Ziel: Streuung <= %.3f mm)."
+            % (speed, self.LOADCELL_TARGET_RANGE),
+            "Weiter: Düse reinigen (260 °C) und auf %d °C heizen."
+            % (self.wizard['temp'],)], 'HEAT')
+    # 5. Düse reinigen + heizen
+    def _wz_heat(self, gcmd):
+        self._prompt_end()
+        self._ensure_leveled()
+        if self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None):
+            self._run("CLEAN_NOZZLE")
+        self._run("M109 S%d" % (self.wizard['temp'],))
+        self._next("5. Düse heiß", [
+            "Düse sauber und auf %d °C." % (self.wizard['temp'],),
+            "Weiter: Z-Nullpunkt messen."], 'ZOFFSET')
+    # 6. Z-Nullpunkt
+    def _wz_zoffset(self, gcmd):
+        self._prompt_end()
+        self._ensure_leveled()
+        self._run("AUTO_Z_OFFSET MAX_OFFSET=5")
+        gap = self.last_result.get('probe_contact_gap')
+        if gap is not None:
+            # bei Drucktemperatur gemessen, mit Reserve
+            self.probe_contact_gap = max(0., round(gap - .25, 2))
+            self._set(self.name, 'probe_contact_gap',
+                      "%.2f" % (self.probe_contact_gap,))
+        self._wz_paper(gcmd, first=True)
+    # 7. Papiertest
+    def _wz_paper(self, gcmd, first=False):
+        if first:
+            # Düse (nicht die Probe - deren Gehäuse sitzt tiefer) auf Z10
+            # über den Messpunkt, dann auf Z1 über dem gemessenen Bett
+            self._lift_to(10.)
+            self.toolhead.manual_move([self.bed_xy[0], self.bed_xy[1],
+                                       None], self.travel_speed)
+            self._run("G90")
+            self._run("G0 Z1 F600")
+        adjust = gcmd.get_float('ADJUST', 0.)
+        if adjust:
+            self._run("SET_GCODE_OFFSET Z_ADJUST=%.3f MOVE=1" % (adjust,))
+        gm = self.printer.lookup_object('gcode_move').get_status(
+            self.reactor.monotonic())
+        height = gm['homing_origin'].z + gm['gcode_position'].z \
+            - (self.last_offset or 0.)
+        btn = []
+        for a in (-.5, -.1, -.05, -.01, .01, .05, .1):
+            btn.append(("%+.2f" % (a,), "SV08_CALIBRATE STEP=PAPER ADJUST=%.2f"
+                        % (a,), "secondary"))
+        btn.append(("Kratzt leicht - speichern", "SV08_CALIBRATE"
+                    " STEP=PAPER_SAVE", "primary"))
+        self._prompt("7. Papiertest", [
+            "Papier unter die Düse legen (Vorsicht, heiß).",
+            "Mit den Knöpfen absenken, bis das Papier beim Hin- und"
+            " Herziehen leicht kratzt. Lieber in kleinen Schritten.",
+            "Düse aktuell %.3f mm über der Messung." % (height,)],
+            btn, [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+    def _wz_paper_save(self, gcmd):
+        if self.last_offset is None:
+            raise gcmd.error("Erst den Z-Nullpunkt messen (STEP=ZOFFSET)")
+        gm = self.printer.lookup_object('gcode_move').get_status(
+            self.reactor.monotonic())
+        # Bett in Maschinen-Z = Babystep-Offset + G-Code-Höhe der Düse
+        bed = gm['homing_origin'].z + gm['gcode_position'].z
+        endstop = self._settings()['stepper_z']['position_endstop']
+        corr = self.z_correction - (bed - self.last_offset)
+        new_endstop = endstop - bed
+        self.z_correction = corr
+        self._set(self.name, 'z_correction', "%.4f" % (corr,))
+        self._set('stepper_z', 'position_endstop', "%.4f" % (new_endstop,))
+        self.wizard['paper'] = (bed, corr, new_endstop)
+        self._run("G91")
+        self._run("G0 Z10 F600")
+        self._run("G90")
+        self._run("M104 S0")
+        self._prompt("7. Papiertest", [
+            "Korrektur Zelle/PEI: %.3f mm, Z-Nullpunkt (position_endstop):"
+            " %.3f mm." % (corr, new_endstop),
+            "Weiter: Input Shaper messen (ADXL im Druckkopf, ca. 3 Minuten,"
+            " laut) - oder überspringen."],
+            [("Input Shaper messen", "SV08_CALIBRATE STEP=SHAPER",
+              "primary"),
+             ("Überspringen", "SV08_CALIBRATE STEP=FINISH", "secondary")],
+            [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+    # 8. Input Shaper
+    def _wz_shaper(self, gcmd):
+        self._prompt_end()
+        self._ensure_leveled()
+        self._run("SHAPER_CALIBRATE")
+        self.wizard['shaper'] = True
+        self._wz_finish(gcmd)
+    def _wz_finish(self, gcmd):
+        lines = ["Übernommen (wird mit SAVE_CONFIG gespeichert):"]
+        lines += self.wizard.get('saved', [])
+        if self.wizard.get('shaper'):
+            lines.append("Input Shaper (Werte siehe Konsole)")
+        lines.append("SAVE_CONFIG startet Klipper neu.")
+        self._prompt("SV08 Kalibrierung fertig", lines,
+                     [("Speichern + Neustart", "SAVE_CONFIG", "primary")],
+                     [("Schließen ohne Speichern",
+                       "SV08_CALIBRATE STEP=CANCEL", "secondary")])
 
 def load_config(config):
     return SV08Loadcell(config)

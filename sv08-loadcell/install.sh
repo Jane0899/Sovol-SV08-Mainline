@@ -138,6 +138,18 @@ if [ -f "$AUTOMOUNT" ] && grep -qE 'test\.sh|dpkg|nmcli' "$AUTOMOUNT"; then
         "$LC_DIR/system/makerbase-automount" > "$tmp"
     sudo install -m 0755 -o root -g root "$tmp" "$AUTOMOUNT"
     rm -f "$tmp"
+    usb_mode=move
+    if [ $ASSUME_YES = 0 ]; then
+        echo "Was soll mit G-Code-Dateien auf einem eingesteckten USB-Stick passieren?"
+        echo "  1) auf den Drucker verschieben, Stick wird geleert (Standard)"
+        echo "  2) auf den Drucker kopieren, Stick bleibt unverändert"
+        echo "  3) nur einbinden: Dateien unter USB/ in der Dateiliste, solange der Stick steckt"
+        read -r -p "Auswahl [1]: " n
+        case "$n" in 2) usb_mode=copy ;; 3) usb_mode=mount ;; esac
+    fi
+    printf '# move | copy | mount, siehe /usr/bin/makerbase-automount\nUSB_MODE=%s\n' "$usb_mode" |
+        sudo tee /etc/default/sv08-usbmount >/dev/null
+    echo "   USB-Modus: $usb_mode (änderbar in /etc/default/sv08-usbmount)"
     echo "   alte Fassung gesichert: $BACKUP_DIR/usr/bin/makerbase-automount"
 fi
 

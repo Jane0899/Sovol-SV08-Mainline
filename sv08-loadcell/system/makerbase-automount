@@ -6,8 +6,11 @@
 #   - WLAN-Verbindung aus USB/wifi.cfg (nmcli)
 #   - Ausführen von USB/test.sh
 #   - Installation von Sovol_Update_Package*.deb + Reboot
-# Übrig: Stick mounten (noexec) und .gcode-Dateien mit Präfix USB- auf den
-# Drucker verschieben. Sie bleiben nach dem Abziehen erhalten, der Stick ist danach leer.
+# Übrig: Stick nach printer_data/gcodes/USB mounten (noexec). Was dann mit den
+# .gcode-Dateien passiert, steht in /etc/default/sv08-usbmount (USB_MODE):
+#   move  - mit Präfix USB- auf den Drucker verschieben, Stick ist danach leer
+#   copy  - mit Präfix USB- auf den Drucker kopieren, Stick bleibt unverändert
+#   mount - nichts kopieren, Dateien nur unter USB/ sichtbar, solange der Stick steckt
 
 uid="__UID__"
 gid="__GID__"
@@ -15,6 +18,8 @@ mediadir="__HOME__/printer_data/gcodes/USB"
 target_dir="__HOME__/printer_data/gcodes"
 log=/home/mount.log
 prefix="USB-"
+USB_MODE=move
+[ -r /etc/default/sv08-usbmount ] && . /etc/default/sv08-usbmount
 
 dev=/dev/${1##*/}
 
@@ -35,7 +40,12 @@ mkdir -p "$mediadir"
 mount -t auto -o uid=$uid,gid=$gid,noexec,nosuid,nodev "$dev" "$mediadir" 2>> $log ||
 	mount -t auto -o noexec,nosuid,nodev "$dev" "$mediadir" 2>> $log || exit 0
 
+case "$USB_MODE" in
+    move) op=mv ;;
+    copy) op=cp ;;
+    *)    exit 0 ;;
+esac
 for file in "$mediadir"/*.gcode; do
     [ -f "$file" ] || continue
-    mv "$file" "$target_dir/$prefix$(basename "$file")" 2>> $log
+    $op "$file" "$target_dir/$prefix$(basename "$file")" 2>> $log
 done

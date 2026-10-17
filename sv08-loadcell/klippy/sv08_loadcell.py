@@ -247,13 +247,14 @@ class SV08Loadcell:
         clean = self._clean_macro() if (auto_clean
                                         and not self.cleaning) else None
         gap = gcmd.get_float('GAP', self.probe_contact_gap)
-        # Untergrenze für den gemessenen Abstand Probe/Kontakt
+        # Untergrenze für den gemessenen Abstand Probe/Kontakt. Der
+        # Erwartungswert hängt von der Düsentemperatur ab und wird erst bei
+        # der Messung berechnet (beim Druckstart heizt die Düse gerade)
+        modeled = (self.contact_gap is not None
+                   and self.contact_gap_coeff is not None)
         min_gap, expected = gap, None
-        if (self.contact_gap is not None
-                and self.contact_gap_coeff is not None):
-            expected = self._expected_gap(self._nozzle_temp())
-            min_gap = max(gap, expected - self.blob_tolerance)
-        elif clean is not None and clean.variables.get('last_clean', 0) < 0:
+        if (not modeled and clean is not None
+                and clean.variables.get('last_clean', 0) < 0):
             # Ohne Bezugsabstand lässt sich Filament an der Düse nicht
             # sicher erkennen: vor dem ersten Homing reinigen
             gcmd.respond_info("LOADCELL_HOME: kein contact_gap kalibriert und"
@@ -294,6 +295,9 @@ class SV08Loadcell:
             # stand der Kopf schon knapp über der Zelle, wäre mehr ausserhalb
             # des Bereichs - und die Starthöhe war ja frei
             lift_z = min(z_probe + self.xy_lift, z_max)
+            if modeled:
+                expected = self._expected_gap(self._nozzle_temp())
+                min_gap = max(gap, expected - self.blob_tolerance)
             if rough or clean is not None:
                 # Grob-Z aus der Probe (Filament an der Düse stört sie nicht):
                 # Kontakt bei z_probe - erwarteter Abstand. Ohne Kalibrierung
@@ -331,6 +335,9 @@ class SV08Loadcell:
             pos = th.get_position()
             pos[2] = start - clearance - max_slow
             z_cell = phoming.probing_move(self.z_endstop, pos, speed)[2]
+            if modeled:
+                expected = self._expected_gap(self._nozzle_temp())
+                min_gap = max(gap, expected - self.blob_tolerance)
             # Der Abstand Probe/Düsenkontakt ist mechanisch fest (nur
             # temperaturabhängig). Ist er kleiner als erwartet, hat etwas
             # anderes die Zelle zuerst berührt

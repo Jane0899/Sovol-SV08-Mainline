@@ -6,7 +6,7 @@ Erweiterung zu dieser Anleitung für SV08 mit **Original-Hardware**: induktive P
 
 - **Z-Homing auf der Wägezelle (`LOADCELL_HOME`)**: Die induktive Probe fährt mit 30 mm/s schnell über die Wägezelle, danach setzt die Düse mit 0,1 mm/s auf. Wiederholgenauigkeit ca. **0,006 mm**.
 - **Automatischer Z-Offset vor jedem Druck (`AUTO_Z_OFFSET`)**: Die Düse auf der Wägezelle ist die Z-Referenz. Die induktive Probe misst über der Zelle und am Bett direkt davor. Daraus ergibt sich der Offset. Gemessen wird bei Drucktemperatur, weil sich die Düse ausdehnt.
-- **Kalibrierungs-Assistent (`SV08_CALIBRATE`)**: Dialoge in Mainsail führen durch Sensor-Check, automatische Messreihen, Z-Nullpunkt, Papiertest und Input Shaper. Die Ergebnisse landen per `SAVE_CONFIG` in der `printer.cfg`.
+- **Kalibrierungs-Assistent (`CALIBRATE_SV08`)**: Dialoge in Mainsail führen durch Sensor-Check, automatische Messreihen, Z-Nullpunkt, Papiertest und Input Shaper. Die Ergebnisse landen per `SAVE_CONFIG` in der `printer.cfg`.
 - **Erprobte Config** vom Referenzgerät, dazu Makros: Motoren bleiben nach dem Druck an und gehen nach 10 min Leerlauf aus. Homing und QGL laufen nur, wenn nötig. Außerdem `M600`, Abluftlüfter (`M106 P3`) und getrennte Bauteillüfter.
 - **Updates über Mainsail** (Moonraker Update-Manager). Der Updater folgt `main`, dort liegt nur der freigegebene Stand. Entwickelt wird im Branch `loadcell-homing`.
 
@@ -55,7 +55,7 @@ Der Installer:
 4. trägt den Updater in `moonraker.conf` ein,
 5. startet Klipper und Moonraker neu.
 
-Danach in Mainsail in der Konsole **`SV08_CALIBRATE`** eingeben und den Dialogen folgen. Das dauert ca. 30–40 Minuten. Bett leer räumen und ein Blatt Papier bereitlegen. Für eine andere Drucktemperatur: `SV08_CALIBRATE TEMP=240`.
+Danach in Mainsail in der Konsole **`CALIBRATE_SV08`** eingeben und den Dialogen folgen. Das dauert ca. 30–40 Minuten. Bett leer räumen und ein Blatt Papier bereitlegen. Für eine andere Drucktemperatur: `CALIBRATE_SV08 TEMP=240`.
 
 ### Slicer
 
@@ -79,7 +79,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 
 | Befehl | Zweck |
 |---|---|
-| `SV08_CALIBRATE [TEMP=220]` | Kalibrierungs-Assistent (einzelne Schritte: `STEP=SENSOR`, `HOME`, `PROBE_TUNE`, `LOADCELL_TUNE`, `HEAT`, `ZOFFSET`, `PAPER`, `SHAPER`, `FINISH`) |
+| `CALIBRATE_SV08 [TEMP=220]` | Kalibrierungs-Assistent (einzelne Schritte: `STEP=SENSOR`, `HOME`, `PROBE_TUNE`, `LOADCELL_TUNE`, `HEAT`, `ZOFFSET`, `PAPER`, `SHAPER`, `FINISH`) |
 | `AUTO_Z_OFFSET` | Z-Offset messen und setzen (läuft in `START_PRINT` automatisch) |
 | `AUTO_Z_OFFSET_SAVE_CORRECTION` | Babystep seit dem letzten `AUTO_Z_OFFSET` als Korrektur übernehmen, z.B. nach einer Feinkorrektur im Druck. Danach `SAVE_CONFIG` |
 | `MAINTENANCE_CALIBRATE_Z [TEMP=220]` | Z-Nullpunkt neu messen und speichern (ohne Papiertest) |

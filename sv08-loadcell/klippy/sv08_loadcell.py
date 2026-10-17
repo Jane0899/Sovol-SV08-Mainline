@@ -7,7 +7,7 @@
 #                    Düse ganz langsam (0,1 mm/s) auf die Zelle
 #   AUTO_Z_OFFSET  - Düse auf Zelle (= Z-Referenz), induktive Probe über der
 #                    Zelle und am Bett -> SET_GCODE_OFFSET Z
-#   SV08_CALIBRATE - Assistent (Mainsail-Dialoge): Sensor-Check, Messreihen
+#   CALIBRATE_SV08 - Assistent (Mainsail-Dialoge): Sensor-Check, Messreihen
 #                    für Probe und Wägezelle, Z-Nullpunkt, Papiertest,
 #                    Input Shaper - Ergebnisse per SAVE_CONFIG
 #
@@ -109,7 +109,7 @@ class SV08Loadcell:
                 ('PROBE_OVERTRAVEL',
                  "Nachlauf der induktiven Probe nach dem Auslösen messen"),
                 ('RETRACT_TIME', "Dauer einer Z-Fahrt berechnen"),
-                ('SV08_CALIBRATE',
+                ('CALIBRATE_SV08',
                  "Kalibrierungs-Assistent (Mainsail-Dialoge)")]:
             self.gcode.register_command(cmd, getattr(self, 'cmd_' + cmd),
                                         desc=desc)
@@ -479,8 +479,8 @@ class SV08Loadcell:
         self.gcode.respond_raw("// action:prompt_end")
     def _next(self, title, lines, step, label="Weiter"):
         self._prompt(title, lines,
-                     [(label, "SV08_CALIBRATE STEP=%s" % (step,), "primary")],
-                     [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+                     [(label, "CALIBRATE_SV08 STEP=%s" % (step,), "primary")],
+                     [("Abbrechen", "CALIBRATE_SV08 STEP=CANCEL", "error")])
     def _run(self, script):
         self.gcode.run_script_from_command(script)
     def _set(self, section, option, value):
@@ -518,22 +518,22 @@ class SV08Loadcell:
         self.toolhead.manual_move([self.bed_xy[0] - px, self.bed_xy[1] - py,
                                    None], self.travel_speed)
         self.toolhead.manual_move([None, None, z], self.lift_speed)
-    def cmd_SV08_CALIBRATE(self, gcmd):
+    def cmd_CALIBRATE_SV08(self, gcmd):
         step = gcmd.get('STEP', 'START').upper()
         if 'TEMP' in gcmd.get_command_parameters():
             self.wizard['temp'] = gcmd.get_int('TEMP', 220, minval=150,
                                                maxval=300)
         handler = getattr(self, '_wz_' + step.lower(), None)
         if handler is None:
-            raise gcmd.error("SV08_CALIBRATE: unbekannter Schritt %s" % step)
+            raise gcmd.error("CALIBRATE_SV08: unbekannter Schritt %s" % step)
         try:
             handler(gcmd)
         except self.printer.command_error as e:
             self._prompt("SV08 Kalibrierung - Fehler",
                          ["Schritt %s fehlgeschlagen:" % (step,), str(e)],
                          [("Schritt wiederholen",
-                           "SV08_CALIBRATE STEP=%s" % (step,), "warning")],
-                         [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL",
+                           "CALIBRATE_SV08 STEP=%s" % (step,), "warning")],
+                         [("Abbrechen", "CALIBRATE_SV08 STEP=CANCEL",
                            "error")])
             raise
     def _wz_start(self, gcmd):
@@ -547,12 +547,12 @@ class SV08Loadcell:
             % (self.wizard['temp'],),
             "Dauer ca. 30-40 Minuten. Bett leer räumen, Düse sauber, ein"
             " Blatt Papier bereitlegen.",
-            "Andere Drucktemperatur: SV08_CALIBRATE TEMP=240"], 'SENSOR',
+            "Andere Drucktemperatur: CALIBRATE_SV08 TEMP=240"], 'SENSOR',
             "Start")
     def _wz_cancel(self, gcmd):
         self._prompt_end()
         self._run("TURN_OFF_HEATERS")
-        gcmd.respond_info("SV08_CALIBRATE abgebrochen. Bereits übernommene"
+        gcmd.respond_info("CALIBRATE_SV08 abgebrochen. Bereits übernommene"
                           " Werte werden erst mit SAVE_CONFIG gespeichert.")
     # 1. Sensor-Check
     def _wz_sensor(self, gcmd):
@@ -571,9 +571,9 @@ class SV08Loadcell:
             "Drücke jetzt die Wägezelle hinten rechts (der Stift, auf den die"
             " Düse beim Homing drückt) mit dem Finger, halte sie gedrückt und"
             " klicke dabei auf 'Jetzt gedrückt'."],
-            [("Jetzt gedrückt", "SV08_CALIBRATE STEP=SENSOR_PRESSED",
+            [("Jetzt gedrückt", "CALIBRATE_SV08 STEP=SENSOR_PRESSED",
               "primary")],
-            [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+            [("Abbrechen", "CALIBRATE_SV08 STEP=CANCEL", "error")])
     def _wz_sensor_pressed(self, gcmd):
         _, triggered = self._query()
         if not triggered:
@@ -581,9 +581,9 @@ class SV08Loadcell:
                 "Die Wägezelle hat NICHT ausgelöst.",
                 "Fester drücken und nochmal versuchen. Bleibt es so: Kabel"
                 " und [stepper_z] endstop_pin (^!PE12) prüfen."],
-                [("Nochmal", "SV08_CALIBRATE STEP=SENSOR_PRESSED",
+                [("Nochmal", "CALIBRATE_SV08 STEP=SENSOR_PRESSED",
                   "warning")],
-                [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+                [("Abbrechen", "CALIBRATE_SV08 STEP=CANCEL", "error")])
             return
         self._next("1. Sensor-Check", [
             "Wägezelle funktioniert.",
@@ -762,16 +762,16 @@ class SV08Loadcell:
             - (self.last_offset or 0.)
         btn = []
         for a in (-.5, -.1, -.05, -.01, .01, .05, .1):
-            btn.append(("%+.2f" % (a,), "SV08_CALIBRATE STEP=PAPER ADJUST=%.2f"
+            btn.append(("%+.2f" % (a,), "CALIBRATE_SV08 STEP=PAPER ADJUST=%.2f"
                         % (a,), "secondary"))
-        btn.append(("Kratzt leicht - speichern", "SV08_CALIBRATE"
+        btn.append(("Kratzt leicht - speichern", "CALIBRATE_SV08"
                     " STEP=PAPER_SAVE", "primary"))
         self._prompt("7. Papiertest", [
             "Papier unter die Düse legen (Vorsicht, heiß).",
             "Mit den Knöpfen absenken, bis das Papier beim Hin- und"
             " Herziehen leicht kratzt. Lieber in kleinen Schritten.",
             "Düse aktuell %.3f mm über der Messung." % (height,)],
-            btn, [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+            btn, [("Abbrechen", "CALIBRATE_SV08 STEP=CANCEL", "error")])
     def _wz_paper_save(self, gcmd):
         if self.last_offset is None:
             raise gcmd.error("Erst den Z-Nullpunkt messen (STEP=ZOFFSET)")
@@ -795,10 +795,10 @@ class SV08Loadcell:
             " %.3f mm." % (corr, new_endstop),
             "Weiter: Input Shaper messen (ADXL im Druckkopf, ca. 3 Minuten,"
             " laut) - oder überspringen."],
-            [("Input Shaper messen", "SV08_CALIBRATE STEP=SHAPER",
+            [("Input Shaper messen", "CALIBRATE_SV08 STEP=SHAPER",
               "primary"),
-             ("Überspringen", "SV08_CALIBRATE STEP=FINISH", "secondary")],
-            [("Abbrechen", "SV08_CALIBRATE STEP=CANCEL", "error")])
+             ("Überspringen", "CALIBRATE_SV08 STEP=FINISH", "secondary")],
+            [("Abbrechen", "CALIBRATE_SV08 STEP=CANCEL", "error")])
     # 8. Input Shaper
     def _wz_shaper(self, gcmd):
         self._prompt_end()
@@ -815,7 +815,7 @@ class SV08Loadcell:
         self._prompt("SV08 Kalibrierung fertig", lines,
                      [("Speichern + Neustart", "SAVE_CONFIG", "primary")],
                      [("Schließen ohne Speichern",
-                       "SV08_CALIBRATE STEP=CANCEL", "secondary")])
+                       "CALIBRATE_SV08 STEP=CANCEL", "secondary")])
 
 def load_config(config):
     return SV08Loadcell(config)

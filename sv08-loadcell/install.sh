@@ -200,6 +200,6 @@ echo
 say "Fertig."
 if [ $UPDATE_MODE = 0 ]; then
     echo "   Backup: $BACKUP_DIR"
-    echo "   Nächster Schritt: in Mainsail die Konsole öffnen und SV08_CALIBRATE ausführen."
+    echo "   Nächster Schritt: in Mainsail die Konsole öffnen und CALIBRATE_SV08 ausführen."
     echo "   Der Assistent führt durch Sensor-Check, Messungen und Papiertest."
 fi

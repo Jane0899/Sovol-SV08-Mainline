@@ -34,11 +34,16 @@ Diese Config homt X und Y auf 0, also vorne bzw. links. Hinten liegen die Anschl
 
 ## Installation
 
-Per SSH auf dem Drucker:
+Per SSH auf dem Drucker, als normaler Benutzer (nicht root):
 
 ```bash
-cd ~
-git clone https://github.com/Jane0899/Sovol-SV08-Mainline.git
+curl -fsSL https://raw.githubusercontent.com/Jane0899/Sovol-SV08-Mainline/main/sv08-loadcell/get.sh | bash
+```
+
+Das klont das Repo nach `~/Sovol-SV08-Mainline` und startet den Installer. Liegt dort schon ein Klon von Rappetors Repo, wird er nach `~/Sovol-SV08-Mainline.old-<Datum>` verschoben. Von Hand geht es genauso:
+
+```bash
+git clone https://github.com/Jane0899/Sovol-SV08-Mainline.git ~/Sovol-SV08-Mainline
 ~/Sovol-SV08-Mainline/sv08-loadcell/install.sh
 ```
 

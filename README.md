@@ -4,6 +4,9 @@ USE THE MAIN REPO FOR STABILITY >>> [Rappetor/Sovol-SV08-Mainline](https://githu
 Getting the Sovol SV08 onto mainline Klipper
 
 > **Dieser Fork:** Nach Schritt 8 weiter mit [`sv08-loadcell/`](sv08-loadcell/README.md): Z-Homing auf der Wägezelle, automatischer Z-Offset, Kalibrierungs-Assistent und Installer.
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/Jane0899/Sovol-SV08-Mainline/main/sv08-loadcell/get.sh | bash
+> ```
 
 This repository will describe installing mainline/regular klipper (via KIAUH) on your Sovol SV08 with the BTT CB1 image.<br>
 

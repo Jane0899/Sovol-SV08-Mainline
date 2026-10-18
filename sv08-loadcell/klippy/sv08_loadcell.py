@@ -933,7 +933,14 @@ class SV08Loadcell:
             self._run("LOADCELL_HOME")
             self._add_gap_point()
         self._run("M109 S%d" % (self.wizard['temp'],))
-        for i in range(self.GAP_SAMPLES):
+        # Heiße Punkte erst nach einer Reinigung bei Drucktemperatur (wie in
+        # START_PRINT): sonst hängt, was beim Aufheizen nachgelaufen ist, an
+        # der Düse und verfälscht den Bezugsabstand
+        warm = len(points)
+        if self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None):
+            self._run("CLEAN_NOZZLE MAX_AGE=0")
+            self._add_gap_point()
+        while len(points) < warm + self.GAP_SAMPLES:
             self._run("LOADCELL_HOME")
             self._add_gap_point()
         self._next("5. Düse heiß", [

@@ -420,9 +420,21 @@ class SV08Loadcell:
                     self.reactor.monotonic()).get('applied'):
                 self.gcode.run_script_from_command(
                     "QUAD_GANTRY_LEVEL\nLOADCELL_HOME ROUGH=1 AUTO_CLEAN=0")
-            self.gcode.run_script_from_command(
-                "_CLEAN_NOZZLE_WIPE PASSES=2" if wipe is not None
-                else "CLEAN_NOZZLE MAX_AGE=0")
+            try:
+                self.gcode.run_script_from_command(
+                    "_CLEAN_NOZZLE_WIPE PASSES=2" if wipe is not None
+                    else "CLEAN_NOZZLE MAX_AGE=0")
+            except self.printer.command_error as e:
+                # Nach dem Wischen noch nicht sauber (z.B. bei 150 °C
+                # nachgelaufen und hart geworden): grob über die Probe homen
+                # statt abbrechen. QGL und Mesh messen mit der Probe, die
+                # Düse zählt erst bei AUTO_Z_OFFSET nach der Reinigung bei
+                # Drucktemperatur (START_PRINT), und dort wird geprüft
+                self.gcode.respond_info(
+                    "LOADCELL_HOME: %s - weiter mit grobem Homing über die"
+                    " Probe" % (e,))
+                self.gcode.run_script_from_command(
+                    "LOADCELL_HOME ROUGH=1 AUTO_CLEAN=0")
         finally:
             self.cleaning = False
     # Automatischer Z-Offset

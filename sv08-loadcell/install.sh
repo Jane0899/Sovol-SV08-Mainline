@@ -1,13 +1,13 @@
 #!/bin/bash
 # sv08-loadcell Installer
 #
-# Voraussetzung: Rappetors Anleitung bis einschließlich Schritt 8 erledigt
+# Voraussetzung: README im Hauptordner bis einschließlich Schritt 7 erledigt
 # (Mainline-Klipper, Moonraker, Mainsail per KIAUH, MCUs mit Klipper-Firmware).
 #
 # Ablauf:
 #   1. Prüfen (Klipper-Stack, MCUs mit Klipper-Firmware)
 #   2. Sichern + wegräumen: alte Configs und Sovol-Reste -> ~/printer_data/backup/sv08-loadcell-<Zeit>/
-#   3. Einspielen: Modul (Symlink), Config-Vorlage, sv08-*.cfg (Symlinks), timelapse
+#   3. Einspielen: Modul (Symlink), Config-Vorlage, sv08-*.cfg (Symlinks), timelapse, numpy
 #      (dazu: Sovols USB-Automount härten, falls noch im Werkszustand)
 #   4. Updater: [update_manager sv08-loadcell] in moonraker.conf
 #   5. Klipper + Moonraker neu starten
@@ -53,16 +53,16 @@ backup() {
 # ---------------------------------------------------------------- 1. Prüfen
 say "Prüfe Voraussetzungen"
 [ "$(id -u)" != 0 ] || die "Nicht als root ausführen, sondern als normaler Benutzer (z.B. biqu/sovol)."
-[ -d "$KLIPPER_DIR/.git" ] || die "~/klipper fehlt. Erst Rappetors Anleitung Schritt 4 (KIAUH) erledigen."
+[ -d "$KLIPPER_DIR/.git" ] || die "~/klipper fehlt. Erst Schritt 4 der Anleitung (KIAUH) erledigen."
 origin="$(git -C "$KLIPPER_DIR" remote get-url origin 2>/dev/null || true)"
 [[ "$origin" == *Klipper3d/klipper* ]] || warn "~/klipper kommt nicht von Klipper3d/klipper ($origin) - Mainline erwartet."
-[ -d "$HOME/moonraker" ] || die "~/moonraker fehlt. Erst Rappetors Anleitung Schritt 4 (KIAUH) erledigen."
+[ -d "$HOME/moonraker" ] || die "~/moonraker fehlt. Erst Schritt 4 der Anleitung (KIAUH) erledigen."
 [ -e "$CFG_DIR/moonraker.conf" ] || die "$CFG_DIR/moonraker.conf fehlt."
 [ -e "$CFG_DIR/mainsail.cfg" ] || die "$CFG_DIR/mainsail.cfg fehlt (Mainsail per KIAUH installieren)."
 systemctl list-unit-files klipper.service >/dev/null 2>&1 || die "Dienst klipper.service fehlt."
 
 mapfile -t DEVS < <(ls /dev/serial/by-id/usb-Klipper_* 2>/dev/null || true)
-[ "${#DEVS[@]}" -ge 2 ] || die "Weniger als zwei MCUs mit Klipper-Firmware gefunden (/dev/serial/by-id/usb-Klipper_*). Erst Rappetors Anleitung Schritte 6-8 erledigen."
+[ "${#DEVS[@]}" -ge 2 ] || die "Weniger als zwei MCUs mit Klipper-Firmware gefunden (/dev/serial/by-id/usb-Klipper_*). Erst Schritte 5-7 der Anleitung erledigen."
 
 UPDATE_MODE=0
 if [ -f "$CFG_DIR/printer.cfg" ] && grep -q '^\[include sv08-loadcell.cfg\]' "$CFG_DIR/printer.cfg"; then
@@ -85,7 +85,7 @@ if [ $UPDATE_MODE = 0 ]; then
         [ $ASSUME_YES = 0 ] || die "Seriennummern nicht eindeutig aus printer.cfg lesbar - ohne -y starten."
         echo "Gefundene MCUs:"
         for i in "${!DEVS[@]}"; do echo "  $((i+1))) ${DEVS[$i]}"; done
-        echo "Welche ist das MAINBOARD ([mcu], in Rappetors Schritt 8 HOSTSERIAL)?"
+        echo "Welche ist das MAINBOARD ([mcu], in Schritt 7 der Anleitung HOSTSERIAL)?"
         read -r -p "Nummer: " n; MCU="${DEVS[$((n-1))]:-}"
         echo "Welche ist der DRUCKKOPF ([mcu extra_mcu], TOOLHEADSERIAL)?"
         read -r -p "Nummer: " n; EXTRA="${DEVS[$((n-1))]:-}"
@@ -179,6 +179,16 @@ if [ ! -s "$CFG_DIR/timelapse.cfg" ]; then
     # leere Datei (kommt vor) -> Makros fehlen, Moonraker meldet Unknown command
     rm -f "$CFG_DIR/timelapse.cfg"
     ln -sfn "$HOME/moonraker-timelapse/klipper_macro/timelapse.cfg" "$CFG_DIR/timelapse.cfg"
+fi
+# Ohne [timelapse] lädt Moonraker die Komponente nicht
+$TOOL moonraker-timelapse "$CFG_DIR/moonraker.conf" | sed 's/^/   /'
+
+say "Numpy für Input Shaper prüfen"
+if "$HOME/klippy-env/bin/python" -c "import numpy" 2>/dev/null; then
+    echo "   vorhanden"
+else
+    sudo apt-get install -y python3-numpy python3-matplotlib libatlas-base-dev libopenblas-dev
+    "$HOME/klippy-env/bin/pip" install numpy
 fi
 
 # ---------------------------------------------------------------- 4. Updater

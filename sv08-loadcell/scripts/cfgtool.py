@@ -9,6 +9,8 @@
 #   cfgtool.py fill-template vorlage.cfg ziel.cfg MCU_SERIAL EXTRA_MCU_SERIAL
 #   cfgtool.py moonraker-add moonraker.conf REPO_PATH ORIGIN BRANCH
 #       [update_manager sv08-loadcell] eintragen, falls noch nicht vorhanden
+#   cfgtool.py moonraker-timelapse moonraker.conf
+#       [timelapse] und [update_manager timelapse] eintragen, falls noch nicht vorhanden
 import re, sys
 
 MARK = "#*# <---------------------- SAVE_CONFIG ---------------------->"
@@ -73,6 +75,23 @@ def moonraker_add(text, repo, origin, branch):
              "managed_services: klipper\n" % (UPDATE_SECTION, repo, origin, branch))
     return text.rstrip("\n") + "\n" + block, True
 
+TIMELAPSE_BLOCKS = [
+    ("[update_manager timelapse]",
+     "[update_manager timelapse]\ntype: git_repo\nprimary_branch: main\n"
+     "path: ~/moonraker-timelapse\n"
+     "origin: https://github.com/mainsail-crew/moonraker-timelapse.git\n"
+     "managed_services: klipper moonraker\n"),
+    ("[timelapse]", "[timelapse]\n"),
+]
+
+def moonraker_timelapse(text):
+    added = []
+    for section, block in TIMELAPSE_BLOCKS:
+        if not re.search(r"^" + re.escape(section), text, re.M):
+            text = text.rstrip("\n") + "\n\n" + block
+            added.append(section)
+    return text, added
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
     if cmd == "dedupe-autosave" and len(argv) == 3:
@@ -96,6 +115,11 @@ def main(argv):
         if added:
             open(argv[2], "w").write(new)
         print("eingetragen" if added else "schon vorhanden")
+    elif cmd == "moonraker-timelapse" and len(argv) == 3:
+        new, added = moonraker_timelapse(open(argv[2]).read())
+        if added:
+            open(argv[2], "w").write(new)
+        print("eingetragen: " + ", ".join(added) if added else "schon vorhanden")
     else:
         sys.exit(__doc__ or "Aufruf siehe Kopf von cfgtool.py")
 

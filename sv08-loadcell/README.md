@@ -29,8 +29,7 @@ Diese Config homt X und Y auf 0, also vorne bzw. links. Hinten liegen die Anschl
 
 ## Voraussetzungen
 
-- Rappetors Anleitung (README im Hauptordner) **bis einschließlich Schritt 8**: Mainline-Klipper, Moonraker und Mainsail per KIAUH, beide MCUs mit Klipper-Firmware.
-- Schritt 5 (Configs und Sovol-Addons) kann man auslassen, der Installer ersetzt ihn.
+- Die Anleitung im Hauptordner ([deutsch](../README.de.md) / [englisch](../README.md)) **bis einschließlich Schritt 7**: Mainline-Klipper, Moonraker, Mainsail und Crowsnest per KIAUH, beide MCUs mit Klipper-Firmware. Dieser Installer ist dort Schritt 8.
 
 ## Installation
 
@@ -50,9 +49,9 @@ git clone https://github.com/Jane0899/Sovol-SV08-Mainline.git ~/Sovol-SV08-Mainl
 Der Installer:
 1. prüft Klipper, Moonraker, Mainsail und die beiden MCUs,
 2. **sichert** alle alten Configs und Sovol-Reste nach `~/printer_data/backup/sv08-loadcell-<Datum>/` und räumt sie dann weg (zusätzlich gibt es ein Archiv des kompletten Config-Ordners),
-3. spielt das Modul und die Configs ein. Die MCU-Seriennummern liest er aus der alten `printer.cfg` oder fragt nach,
+3. spielt das Modul, die Configs, Numpy (für den Input Shaper) und Moonraker-timelapse ein. Die MCU-Seriennummern liest er aus der alten `printer.cfg` oder fragt nach,
    **härtet Sovols USB-Automount** vom Werks-Image: Das führte beim bloßen Einstecken eines Sticks als root `test.sh` aus, verband sich mit dem WLAN aus `wifi.cfg` und installierte `.deb`-Pakete samt Neustart. Übrig bleibt: Stick mounten (ohne Ausführrechte). Der Installer fragt, was mit den `.gcode`-Dateien passiert: als `USB-…` auf den Drucker **verschieben** (Stick wird geleert), **kopieren** (Stick bleibt unverändert) oder **nur einbinden** (unter `USB/` sichtbar, solange der Stick steckt). Ändern lässt sich das später in `/etc/default/sv08-usbmount` (`USB_MODE=move|copy|mount`),
-4. trägt den Updater in `moonraker.conf` ein,
+4. trägt den Updater (und `[timelapse]`) in `moonraker.conf` ein,
 5. startet Klipper und Moonraker neu.
 
 Danach in Mainsail in der Konsole **`CALIBRATE_SV08`** eingeben und den Dialogen folgen. Das dauert ca. 30–40 Minuten. Bett leer räumen und ein Blatt Papier bereitlegen. Für eine andere Drucktemperatur: `CALIBRATE_SV08 TEMP=240`.

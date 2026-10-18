@@ -1,18 +1,18 @@
+**🇩🇪 [Deutsche Anleitung / German version](README.de.md)**
+
 # Sovol-SV08-Mainline
 USE THE MAIN REPO FOR STABILITY >>> [Rappetor/Sovol-SV08-Mainline](https://github.com/Rappetor/Sovol-SV08-Mainline)
 
 Getting the Sovol SV08 onto mainline Klipper
 
-> **Dieser Fork:** Nach Schritt 8 weiter mit [`sv08-loadcell/`](sv08-loadcell/README.md): Z-Homing auf der Wägezelle, automatischer Z-Offset, Kalibrierungs-Assistent und Installer.
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/Jane0899/Sovol-SV08-Mainline/main/sv08-loadcell/get.sh | bash
-> ```
-
 This repository will describe installing mainline/regular klipper (via KIAUH) on your Sovol SV08 with the BTT CB1 image.<br>
 
 Run it from either eMMC or SD card, you choose.<br>
 
-**TL;DR**: _make a backup of klipper config, remove the eMMC from the printer, write CB1 image to eMMC, change BoardEnv.txt and system.cfg, put the eMMC back in the printer, install KIAUH; klipper, moonraker, and mainsail (and optional extras), create firmware(s), flash the tool head MCU and board MCU. DONE!_
+> [!NOTE]
+> **About this fork:** after the base installation, the installer in [`sv08-loadcell/`](sv08-loadcell/README.md) sets up the whole printer configuration in one go (**Step 8**). It replaces the manual configuration step of the original guide and adds Z homing on the Sovol load cell, an automatic Z offset before every print, automatic nozzle cleaning and a calibration wizard. Made for **stock SV08 hardware** (inductive probe + load cell).
+
+**TL;DR**: _make a backup of klipper config, remove the eMMC from the printer, write CB1 image to eMMC, change BoardEnv.txt and system.cfg, put the eMMC back in the printer, install KIAUH; klipper, moonraker, mainsail and crowsnest, back up the stock firmware, flash Katapult and Klipper on the tool head MCU and board MCU, run the sv08-loadcell installer and the calibration wizard. DONE!_
 
 <br>
 
@@ -50,12 +50,13 @@ Ok, now you can continue.
 - [STEP 2 - Flashing Media](#step-2---flashing-media)
   - [METHOD 1: Write Image Directly To eMMC](#method-1-write-image-directly-to-emmc)
   - [METHOD 2: Write Image To SD -> eMMC](#method-2-write-image-to-sd---emmc)
+  - [METHOD 4: Write Image Directly To eMMC Via USB C Cable](#method-4-write-image-directly-to-emmc-via-usb-c-cable)
 - [STEP 3 - Changes To The BOARDENV.TXT & Setup WI-FI](#step-3---changes-to-the-boardenvtxt--setup-wi-fi)
 - [STEP 4 - Install Mainline Klipper](#step-4---install-mainline-klipper)
-- [STEP 5 - Configure Printer/Klipper & Addons](#step-5---configure-printerklipper--addons)
-- [STEP 6 - Stock Firmware Backup](#step-6---stock-firmware-backup)
-- [STEP 7 - Flash Katapult Bootloader](#step-7---flash-katapult-bootloader)
-- [STEP 8 - Flash Klipper Firmware On MCUs](#step-8---flash-klipper-firmware-on-mcus)
+- [STEP 5 - Stock Firmware Backup](#step-5---stock-firmware-backup)
+- [STEP 6 - Flash Katapult Bootloader](#step-6---flash-katapult-bootloader)
+- [STEP 7 - Flash Klipper Firmware On MCUs](#step-7---flash-klipper-firmware-on-mcus)
+- [STEP 8 - Install The Printer Configuration And Calibrate](#step-8---install-the-printer-configuration-and-calibrate)
 - [Big Thanks & Contribute](#big-thanks--contribute)
 - [Disclaimer](#disclaimer)
 
@@ -64,13 +65,13 @@ Ok, now you can continue.
 - First, create a **backup** of all the config files on your original Sovol SV08. You can do this in the web/mainsail interface -> Machine -> Select all files/folders -> Download.
   - Optionally you can also SSH or SFTP into your machine (port: 22, username/password: sovol/sovol) and backup additional .sh scripts in the /home/sovol/ folder.
   - For example use [PuTTY](https://www.putty.org/) for SSH and [WinSCP](https://winscp.net/) for SFTP (_SSH File Transfer Protocol_).
-- You WILL need the printer.cfg later in this process (for the /dev/serial/by-id/usb-Klipper*stm32f103xe* serials).
+- Keep the backed-up printer.cfg: it contains the `/dev/serial/by-id/usb-Klipper*stm32f103xe*` serials of your MCUs, which helps in **Step 7**.
 - You need either a '**Makerbase MKS EMMC-ADAPTER V2 USB 3.0**' USB adapter or '**Makerbase MKS MICROSD TO EMMC ADAPTER**' to be able to read/write the eMMC. <sub>*(Do note it's also possible without an eMMC adapter, but this involves either writing the image to the SD card and then writing from the SD card to the eMMC, see 'method 2', or connecting the mainboard via USB Type C to your computer, see 'method 4'. But you need to know how to clear the eMMC partitions from ssh/Linux).*</sub>
   - It is recommended to get yourself a separate **eMMC module** (MKS eMMC Module) on which you install the new OS Image and mainline klipper. This way you always have a backup (eMMC) of a stock/working printer.
 - If you go for the '_method 2_' you need a big enough **MicroSD card**, it's *also* possible to run everything from the SD card and not use an eMMC.
 - If you go for the '_method 4_' you will need a long enough **Right angle USB C cable**, or alternative, in order to connect the board to your computer
 - You will need an ST-Link V2 (Mini) with the **STM32CubeProgrammer** software installed to be able to update/flash the MCU firmware.
-- The files used for this guide can now be found together in the GitHub folder `/files-used/` [HERE](files-used/)
+- The files used for this guide can be found together in the GitHub folder `/files-used/` [HERE](files-used/)
 - To edit the different files during this guide please use a text editor like [Notepad++](https://notepad-plus-plus.org/) (or use `nano` from ssh). This way we can make sure the files stay in a proper format with proper (Linux style) line endings and work as intended. *When using the default Windows Notepad this is not always the case!*
 
 ### EMMC Sellers
@@ -93,7 +94,7 @@ Ok, now you can continue.
 2. Remove the metal plate by removing the 6 screws.
 3. You can now see the eMMC module on the board, remove the 2 screws that are holding it in, and carefully remove the eMMC module.
    - Take note of the direction of the eMMC module (_hint; you can also see an arrow on the board which way the module goes_)
-   
+
    ![The location of the eMMC module on the board](images/mainboard-emmc-location.jpg)
 
 <br>
@@ -107,16 +108,16 @@ Ok, now you can continue.
 First, download the BIGTREETECH CB1 Linux image (the original Sovol SV08 image was also based on this): [https://github.com/bigtreetech/CB1](https://github.com/bigtreetech/CB1/releases/tag/V2.3.4)
 >[!NOTE]
 >Regardless of the medium (SD card or eMMC) or the size the BIGTREETECH CB1 Linux image will expand the size of the image to the full size of the card being used.
->
+
 Here we can use 3 methods:
 
 **Method 1**: Write the CB1 image directly to the eMMC and use it that way
 
 **Method 2**: Write the CB1 image to an SD card and use that to get the CB1 image on the eMMC.
 
-_**Method 3**: Choose to run everything from the SD card and stop at Method 2.2_
+_**Method 3**: Choose to run everything from the SD card and stop at Method 2, point 2._
 
-_**Method 4**: Write the CB1 image directly to the eMMC by connecting the mainboard to a computer via USB C cable
+_**Method 4**: Write the CB1 image directly to the eMMC by connecting the mainboard to a computer via USB C cable_
 
 > [!TIP]
 > Some people get an error while booting, or it doesn't want to boot at all, after writing the image with Balena Etcher. Some have had success writing the image with the `Raspberry Pi Imager` instead.
@@ -128,7 +129,7 @@ _**Method 4**: Write the CB1 image directly to the eMMC by connecting the mainbo
 1. Download the **MINIMAL** BIGTREETECH image. Careful, there's also a full image that has an unknown version of Klipper already installed. Go to: https://github.com/bigtreetech/CB1/releases/tag/V2.3.4
    - Used in this example: [CB1_Debian11_minimal_kernel5.16_20240319.img.xz](https://github.com/bigtreetech/CB1/releases/download/V2.3.4/CB1_Debian11_minimal_kernel5.16_20240319.img.xz)
 2. Put the eMMC module in the USB adapter (again, mind the direction of the module, there is an arrow on the adapter) and put the USB adapter in your computer.
-3. _You can use this moment to back-up `/home/sovol/printer_data/config/` for later. (For example the `printer.cfg` for the `/dev/serial/by-id/usb-Klipper_stm32f103xe` serials, do you have a serial like `/dev/ttyACM1` here no worries, we will find the full serial in **Step 8**)_.
+3. _You can use this moment to back-up `/home/sovol/printer_data/config/` for later. (For example the `printer.cfg` for the `/dev/serial/by-id/usb-Klipper_stm32f103xe` serials, do you have a serial like `/dev/ttyACM1` here no worries, we will find the full serial in **Step 7**)_.
 4. Use [BalenaEtcher](https://github.com/balena-io/etcher/releases) to write the image to the eMMC
    - Used in this example: balenaEtcher-win32-x64-1.19.21.zip (portable, so doesn't need an installer)
    - Open Balena Etcher<br>
@@ -143,7 +144,7 @@ _You can now continue to **STEP 3**_
 
 ## METHOD 2: WRITE IMAGE TO SD -> eMMC
 
-1. Write the image to the eMMC chip
+1. Download the **MINIMAL** BIGTREETECH image (see Method 1, point 1).
    - Used in this example: [CB1_Debian11_minimal_kernel5.16_20240319.img.xz](https://github.com/bigtreetech/CB1/releases/download/V2.3.4/CB1_Debian11_minimal_kernel5.16_20240319.img.xz)
 
 2. Use [BalenaEtcher](https://github.com/balena-io/etcher/releases) to write the image to the **SD card**
@@ -154,11 +155,11 @@ _You can now continue to **STEP 3**_
      -> Flash! (this will erase everything on the SD card!)<br>
 
 > [!NOTE]
-> _Sidenote here: you could, if you choose here, run the printer from the SD card and skip the whole eMMC. Just so you know ;-)_
+> _Sidenote here: you could, if you choose here, run the printer from the SD card and skip the whole eMMC (Method 3). Just so you know ;-)_
 
 3. Put the eMMC module in the USB adapter (again, mind the direction of the module, there is an arrow on the adapter) and put the USB adapter in your computer.<br>
 
-4. _You can use this moment to back-up `/home/sovol/printer_data/config/` for later. (For example the `printer.cfg` for the `/dev/serial/by-id/usb-Klipper_stm32f103xe` serials, do you have a serial like `/dev/ttyACM1` here no worries, we will find the full serial in **Step 8**)_
+4. _You can use this moment to back-up `/home/sovol/printer_data/config/` for later. (For example the `printer.cfg` for the `/dev/serial/by-id/usb-Klipper_stm32f103xe` serials, do you have a serial like `/dev/ttyACM1` here no worries, we will find the full serial in **Step 7**)_
 
 5. We need to clear all the partitions from the eMMC (this will erase everything on the eMMC!) :
    - In Windows open the command prompt (Win-R -> cmd) and run `diskpart` (be careful with diskpart, we don't want to erase the wrong disk here!)
@@ -197,7 +198,7 @@ _Please continue to **STEP 3** and then come back here!_
 5. Connect the other end of the USB cable into your computer
 
 > [!NOTE]
-> _Sidenote here: you can use a USB hub with a dedicated power adapter in between for added realiability_
+> _Sidenote here: you can use a USB hub with a dedicated power adapter in between for added reliability_
 
 6. Use [Zadig](https://zadig.akeo.ie/) to install a universal USB driver for your mainboard :
    - Open Zadig software<br>
@@ -206,13 +207,13 @@ _Please continue to **STEP 3** and then come back here!_
 
      -> Locate your mainboard, which will likely appear as an unknown device with USB ID `1F3A EFE8`<br>
      ![Locate Mainboard](images/notatechguy3d/zadig-find-your-mainboard.png)
-     
+
      -> Install driver<br>
 7. Use [Sunxi-tools](https://github.com/bigtreetech/sunxi-tools) to switch the mainboard into USB device mode :
    - Download/clone the repository, and unzip contents into sunxi-tools folder
    - In Windows open the command prompt (Win-R -> cmd) and run `cd <path>` where path is downloaded sunxi-tools folder
-   - In command prompt, run `sunxi-fel.exe uboot u-boot-sunxi-cb1-emmc.bin` , this should switch the mainboard into USB storage mode 
-8.    _You can use this moment to back-up `/home/sovol/printer_data/config/` for later. (For example the `printer.cfg` for the `/dev/serial/by-id/usb-Klipper_stm32f103xe` serials, do you have a serial like `/dev/ttyACM1` here no worries, we will find the full serial in **Step 8**)_.
+   - In command prompt, run `sunxi-fel.exe uboot u-boot-sunxi-cb1-emmc.bin` , this should switch the mainboard into USB storage mode
+8. _You can use this moment to back-up `/home/sovol/printer_data/config/` for later. (For example the `printer.cfg` for the `/dev/serial/by-id/usb-Klipper_stm32f103xe` serials, do you have a serial like `/dev/ttyACM1` here no worries, we will find the full serial in **Step 7**)_.
 9. Use [BalenaEtcher](https://github.com/balena-io/etcher/releases) to write the image to the eMMC
    - Used in this example: balenaEtcher-win32-x64-1.19.21.zip (portable, so doesn't need an installer)
    - Open Balena Etcher<br>
@@ -248,7 +249,7 @@ To make the CB1 image setup correctly we need to copy a file and make a few chan
   > <sub>**NOTE 1**: by setting bootlogo=false you get the Linux boot messages on the HDMI display, if you set bootlogo=true you only see them when connecting a keyboard and pressing a key.</sub><br>
   <sub>**NOTE 2**: `fdtfile=sun50i-h616-sovol-emmc` supports both eMMC and SD cards but will, obviously, only boot from one (according to the BTT CB1 docs the SD card has priority over eMMC but there have been reports of it being the other way around; if it boots from eMMC and not the SD card please check note 3 below or make sure the eMMC is empty or non-bootable or just remove it from the printer).</sub><br>
   <sub>**NOTE 3**: When using `fdtfile=sun50i-h616-sovol-emmc` with an SD card it seems to always boot from the SD card but (seemingly randomly) either use the data partition from the eMMC or the SD card. You can check this by looking at `lsblk` and see if both `/boot` and  `/` are used from the SD card or not. Otherwise poweroff and restart and check again. You can also use `fdtfile=sun50i-h616-biqu-sd` to force the use of the SD card, but you will lose eMMC support.</sub><br>
-  
+
 
 - Save your changed BoardEnv.txt!
 
@@ -267,7 +268,7 @@ To make the CB1 image setup correctly we need to copy a file and make a few chan
 
 6. Eject the USB adapter from your computer then put the eMMC (and **SD card** in case of _method 2_) back into the printer and boot it, then:
    - SSH into the printer (find the IP address on your router or use the configured hostname), username/password: **biqu/biqu**
-   - If everything is ok your printer will boot nicely, you can SSH into the printer, and you are done with this step and ready to install mainline Klipper. You can also continue _**Method 2**, point 5, and finalize writing the system to eMMC!_
+   - If everything is ok your printer will boot nicely, you can SSH into the printer, and you are done with this step and ready to install mainline Klipper. You can also continue _**Method 2**, point 6, and finalize writing the system to eMMC!_
 
 > [!NOTE]
 > The 'system booting..' message on the LCD is just a splashscreen/image, not an actual status the system is still booting. _Only when the LCD screen is properly initialized by Klipper this message/image will go away._ But since we just put a fresh image _without Klipper_ on there, let alone the LCD config, this will never happen and the screen keeps showing it's booting. Check your router to see if an ip-address is assigned to the printer or use an hdmi screen to check the output and see if it has indeed booted.
@@ -316,7 +317,7 @@ Time for the fun stuff! Now we shall install KIAUH, Klipper, Moonraker, etc. Ple
 
 4. Install Klipper, Moonraker, Mainsail, and Crowsnest (in this order, _also check tip below_) via KIAUH.
 
-   - So run KIAUH and choose: option **'1) [Install]'** and install those items (_using default options, download recommended macros; Yes_).
+   - So run KIAUH and choose: option **'1) [Install]'** and install those items (_using default options, download recommended macros; **Yes**_ - the installer in Step 8 needs the `mainsail.cfg` this creates).
    - Crowsnest install asks to reboot the printer, please do so now (unless you have an HDMI screen and want to use KlipperScreen, you can install that first too before rebooting).
 
 > [!IMPORTANT]
@@ -324,115 +325,23 @@ Time for the fun stuff! Now we shall install KIAUH, Klipper, Moonraker, etc. Ple
 > 1. Install Klipper like normal with KIAUH and let it finish with the above error.
 > 2. Quit KIAUH and run the following commands:
 > ```
-> rm -rf ~/.cache 
+> rm -rf ~/.cache
 > ~/klippy-env/bin/pip3 install pyserial aenum wrapt pycparser markupsafe greenlet python-can Jinja2 cffi
 > ```
 > 3. Then (re)install Klipper with KIAUH; when asked to clone the repository and overwrite choose **Yes**, when asked to `Virtualenv already exists. Re-create?` choose **No**. It should now install without errors..
 > 4. After this when installing Moonraker and you get a DEPRECATED error and incomplete Moonraker install; just re-install it again with KIAUH (overwrite everything) and it should succeed the second time.
 
+> [!NOTE]
+> Numpy (for input shaping) and Moonraker-timelapse don't need to be installed by hand, the installer in **Step 8** does that.
 
-5. Install Numpy (needed for input shaping) _(OR new! With KIAUH v6 (alpha) instead of installing it manually as below do this and continue to 6; KIAUH main menu -> Advanced -> Extra Dependencies: -> [Input Shaper])_
-
-   ```bash
-   sudo apt update
-   sudo apt install python3-numpy python3-matplotlib libatlas-base-dev libopenblas-dev
-   ~/klippy-env/bin/pip install -v numpy
-   ```
-6. Install _Moonraker-timelapse_
-   - See [https://github.com/mainsail-crew/moonraker-timelapse](https://github.com/mainsail-crew/moonraker-timelapse) for detailed information.
-   - First install moonraker-timelapse:
-   ```bash
-   cd ~/
-   git clone https://github.com/mainsail-crew/moonraker-timelapse.git
-   cd ~/moonraker-timelapse
-   make install
-   ```
-   - Then edit your `~/printer_data/config/moonraker.conf` and add the following lines:
-   ```ini
-   [update_manager timelapse]
-   type: git_repo
-   primary_branch: main
-   path: ~/moonraker-timelapse
-   origin: https://github.com/mainsail-crew/moonraker-timelapse.git
-   managed_services: klipper moonraker
-
-   [timelapse]
-   ##   Following basic configuration is default to most images and don't need
-   ##   to be changed in most scenarios. Only uncomment and change it if your
-   ##   Image differ from standart installations. In most common scenarios 
-   ##   a User only need [timelapse] in their configuration.
-   output_path: ~/timelapse/                ##   Directory where the generated video will be saved
-   frame_path: /tmp/timelapse/              ##   Directory where the temporary frames are saved
-   ffmpeg_binary_path: /usr/bin/ffmpeg      ##   Directory where ffmpeg is installed
-   ```
-   - After this you can configure the timelapse in your Mainsail Interface Settings.
-   - Check your slicer (e.g. Orca Slicer), your printer profile should have the timelapse frame g-code. You will find this under:<br>
-      -> Printer settings<br>
-      -> Machine G-Code<br>
-      -> 'Before layer change G-code'<br>
-      -> If not in there, add: `TIMELAPSE_TAKE_FRAME`<br>
-
-7. You have now installed mainline Klipper with the Mainsail web interface (and addons)! But there is more to be done to get it all working properly..
+5. You have now installed mainline Klipper with the Mainsail web interface!
    - If you haven't rebooted after installing Crowsnest:<br> `sudo reboot`
    - After the board has rebooted, in your browser go to the Mainsail web interface (via the IP address or hostname) and check if it's running.
-   - It will give an error since we still have to put our backed-up printer.cfg back.
+   - Mainsail will show a Klipper error because there is no printer configuration yet. That's expected, the configuration is installed in **Step 8**, after the MCUs have their new firmware.
 
 <br>
 
-# STEP 5 - CONFIGURE PRINTER/KLIPPER & ADDONS
-
-Next, we have to configure our printer and put back some addons Sovol has added (probe_pressure and z_offset_calibration) and get the basics working. 
-
-Please use the files provided [HERE](files-used/) in the `/files-used/` GitHub folder. Some items (like the 'z_offset_calibration' script) have been fixed to work with the newest version of Klipper and other items in the printer.cfg have been changed/improved e.g. for a more silent and cooler (motor) running printer.
-
-1. RESTORE THE SOVOL ADDONS _(from the `/files-used/sovol-addons/` github directory)_ [HERE](files-used/sovol-addons/):<br>
-    - Use an SFTP program (like WinSCP) to connect to the printer (IP address or hostname, port: 22, username/password: biqu/biqu)
-    - Put the files `'probe_pressure.py'` and `'z_offset_calibration.py'` into the `'~/klipper/klippy/extras/'` folder.<br>
-
-2. GRAB BASE PRINTER CONFIGURATION _(from the `/files-used/config/` github directory)_ [HERE](files-used/config/):<br>
-
-   - Copy the entire config folder to the printer `~/printer_data/config` folder.<br>
-
-   - this folder contains the following<br>
-     `options\*`<br>
-     `printer.cfg`<br>
-     `sovol-macros.cfg`<br>
-     `saved_variables.cfg`<br>
-     `crowsnest.conf`<br>
-
-
-   - **OPTIONAL**: Open your backup of your printer.cfg and copy the correct serials under [mcu] and [mcu extra_mcu] (**only** when your serial looks like `/dev/serial/by-id/usb-Klipper_stm32f103xe_xxxx`) to your new printer.cfg, this might save you some time later..<br>
-   _Do your serials look like `/dev/serial/by-id/ttyACM0` or `/dev/serial/by-id/ttyACM1` then you can also skip this, we will find the correct full serials in **STEP 8**_.
-
-3. Do a firmware_restart (or reboot the whole printer) and you should have a working SV08.
-
-4. Update the slicer start g-code. The START_PRINT macro has been updated/improved: uses your actual bed temperature for meshing etc., does a QGL with home Z, and can do a Z_OFFSET_CALIBRATION before each print.
-
-   - Go to OrcaSlicer/PrusaSlicer and edit the printer settings :<br>
-     -> Machine G-code<br>
-     -> Machine start G-code<br>
-     -> For OrcaSlicer, change your 'START_PRINT' line to this:<br>
-
-     ```gcode
-      START_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single]
-     ```
-     
-     -> For PrusaSlicer, change your 'START_PRINT' line to this:<br>
-     ```gcode
-      START_PRINT EXTRUDER_TEMP=[first_layer_temperature] BED_TEMP=[first_layer_bed_temperature]
-     ```
-     
-  5. Want to use some **heatsoak time** before each print (heatsoaking in itself is enabled but the time set to 0 by default), please change the global variable `variable_heat_soak_time: 0` (to e.g. `variable_heat_soak_time: 10` for a 10 minute heatsoak) under `[gcode_macro _global_var]` in the 'sovol-macros.cfg'. If you want to skip heatsoaking for a print just add `HEATSOAK=0` to the START_PRINT gcode as shown in the previous point (and use `HEATSOAK=1` to enable it again from the slicer).
-
-   - Now you can print and use the sovol presets like before!
-
-> [!NOTE]
-> **NOTE 1**: all the .sh scripts in the macros have been commented out and there is a basic but reduced version of the sovol menu. It has all the basics to get you going.<br>
-> **NOTE 2**: the **[adxl345]** and **[resonance_tester]** configs have been commented out at this point, the tool head MCU needs a new firmware for this. You uncomment/enable them again after **Step 8**.
-
-<br>
-
-# STEP 6 - STOCK FIRMWARE BACKUP
+# STEP 5 - STOCK FIRMWARE BACKUP
 
 > [!IMPORTANT]
 > When connecting the ST-Link to the printer, make sure the printer is powered **OFF**. The MCU will be powered by the ST-Link.
@@ -464,16 +373,16 @@ It's important to make a backup of the current (stock) firmware. This way you ca
 
   ### Mainboard ST-Link pins location:
   ![mainboard st-link pins location](images/board-stlink-pins-v2.jpg)
-  
+
   ### Toolhead ST-Link pins location:
   ![toolhead st-link pins location](images/toolhead-stlink-pins-v2.jpg)
 
-4. Insert the ST-Link into your computer (_printer stays off_), open the STM32CubeProgrammer software, and press CONNECT. It should now connect and populate the middle screen with memory stuff.
-5. Please select `Read all` from the `Read` menu, this will read everything and set the correct size (to save).
+3. Insert the ST-Link into your computer (_printer stays off_), open the STM32CubeProgrammer software, and press CONNECT. It should now connect and populate the middle screen with memory stuff.
+4. Please select `Read all` from the `Read` menu, this will read everything and set the correct size (to save).
 
 ![read all](images/stlink-firmware-read-all.jpg)
 
-6. Please select `Save As ..` from the `Read` menu and save the current firmware (e.g. _toolhead_original_firmware.bin_ or _mainboard_original_firmware.bin_).
+5. Please select `Save As ..` from the `Read` menu and save the current firmware (e.g. _toolhead_original_firmware.bin_ or _mainboard_original_firmware.bin_).
 
 ![save as](images/stlink-firmware-save-as.jpg)
 
@@ -483,14 +392,14 @@ It's important to make a backup of the current (stock) firmware. This way you ca
 
 <br>
 
-# STEP 7 - FLASH KATAPULT BOOTLOADER
+# STEP 6 - FLASH KATAPULT BOOTLOADER
 
 > [!IMPORTANT]
 > When connecting the ST-Link to the printer, make sure the printer is powered OFF. The MCU will be powered by the ST-Link.<br>
 > Also make sure your ST-Link has the latest firmware, use the STM32CubeProgrammer application 'Firmware upgrade' button for this.
 
 > [!NOTE]
-> After flashing the Katapult firmware the printer will start up silently; no fans, no light, and no display during boot. Don't be alarmed, this is normal. We will enable these functions again in step 8.
+> After flashing the Katapult firmware the printer will start up silently; no fans, no light, and no display during boot. Don't be alarmed, this is normal. We will enable these functions again in step 7.
 
 To make life easier in the future we are going to flash Katapult to our MCUs (we flash Katapult on both the mainboard MCU _and_ the toolhead MCU). This is a bootloader that makes it possible to flash Klipper firmware without the ST-Link via CANBus, USB or UART by the Host.
 
@@ -515,7 +424,7 @@ To make life easier in the future we are going to flash Katapult to our MCUs (we
    ```
 
    In menuconfig select the following options :<br>
-   ![Katapult makemenu config settings](/images/katapult-firmware-settings.jpg)<br>
+   ![Katapult makemenu config settings](images/katapult-firmware-settings.jpg)<br>
 
 3. Press Q to quit and save changes.<br>
 4. Run the commands to build the firmware (_katapult.bin_):<br>
@@ -542,27 +451,27 @@ Done! The Katapult bootloader is on the MCU! Please click on 'Disconnect' and th
 
 <br>
 
-# STEP 8 - FLASH KLIPPER FIRMWARE on MCUs
+# STEP 7 - FLASH KLIPPER FIRMWARE ON MCUs
 
 > [!NOTE]
 > The standard Klipper firmware works on both the toolhead MCU and the mainboard MCU. Originally Sovol made multiple changes to the `stm32f1.c` source for the firmware but they are not mandatory. **Only now, the printer starts up silently; no fans, no light, and no display during boot.** You CAN get some of this functionality back by enabling GPIO pins during startup, see notes below make menuconfig.
 
 > [!TIP]
-> For future Klipper firmware updates, after completing the steps below, you only have to run the script at step `8.7`.
+> For future Klipper firmware updates, after completing the steps below, you only have to run the script at step `7.7`.
 
-It's time to create and flash the Klipper firmware! In the future, you only have to do this step when you need to update your Klipper firmware. _This section assumes you already have **Katapult** flashed and **pyserial** (step 7.1) installed._
+It's time to create and flash the Klipper firmware! In the future, you only have to do this step when you need to update your Klipper firmware. _This section assumes you already have **Katapult** flashed and **pyserial** (step 6.1) installed._
 
 1. Switch on the printer and SSH (biqu/biqu) into the printer.
 
-2. Open the file printer.cfg. Look at the `[mcu]` and `[extra_mcu]` sections, and copy-paste only the section circled in red for each MCU, we will need it later:
+2. Find the serials of both MCUs. We only need the part after `usb-Klipper_stm32f103xe_` (or `usb-Katapult_stm32f103xe_`), circled in red below. Write down which one belongs to the **mainboard** (`[mcu]`) and which one to the **toolhead** (`[mcu extra_mcu]`), the installer in Step 8 asks for it.
 
 ![alt text](images/haa/haa_printercfg.jpg)
 
-- If you have this in your printer.cfg:
+- If your backed-up stock printer.cfg (see Prerequisites) has serials like these, you can take them from there. If it has `ttyACM0`/`ttyACM1` instead, like this:
 
 ![alt text](images/haa/haa_printercfg_tty.jpg)
 
-You have to replace each ID to have the same pattern as above. To do that, find the correct serial name for the MCU with the command. **AND READ THE WARNING BELOW!**<br>
+or you don't have a backup, find the full serials with this command. **AND READ THE WARNING BELOW!**<br>
 
 ```bash
 ls -la /dev/serial/by-id/
@@ -572,7 +481,7 @@ You will have this :
 
 ![alt text](images/haa/haa_lsla.jpg)
 
-Copy the blue part to replace `ttyACM0` or `ttyACM1` in your printer.cfg (_case sensitive_). At the end, you should have this (with your digits):
+The blue part is the serial (_case sensitive_). In printer.cfg notation it looks like this (with your digits):
 
 ![alt text](images/haa/haa_printercfg2.jpg)
 
@@ -586,15 +495,15 @@ To be 100% sure you have the correct serial linked to the correct MCU please che
 ![Toolhead disconnect USB](images/toolhead-disconnect-usb.jpg)
 
 > [!NOTE]
-> The correct serial for our MCU's in the printer.cfg always begins with **`usb-Klipper_stm32f103xe_`** (note: case sensitive). If you only found serials that start with `usb-Katapult_stm32f103xe_` when doing _`ls /dev/serial/by-id/`_ please replace `Katapult` with `Klipper` for the serials in your printer.cfg. <sub>It is possible your serials only contain `usb-Katapult_stm32f103xe_` at the moment because the MCU is already in DFU mode, ready to receive the Klipper firmware. After flashing the Klipper firmware it will become `usb-Klipper_stm32f103xe_`.</sub>
+> The correct serial for our MCU's in the printer.cfg always begins with **`usb-Klipper_stm32f103xe_`** (note: case sensitive). If you only found serials that start with `usb-Katapult_stm32f103xe_` when doing _`ls /dev/serial/by-id/`_ that's fine: the MCU is in bootloader mode, ready to receive the Klipper firmware. The number after it stays the same. After flashing the Klipper firmware it will become `usb-Klipper_stm32f103xe_`.
 
 3. Download the script  [Automatic MCU script update](<Automatic MCU script update/>) and copy it in your `~/klipper` folder on the printer.
 
-4. Edit it with nano to change the ID of each MCU with what you have copied at [2](#step-8---flash-klipper-firmware-on-mcus):
+4. Edit it with nano to change the ID of each MCU with what you have written down at [2](#step-7---flash-klipper-firmware-on-mcus):
 ```batch
 sudo nano ~/klipper/update_klipper_mcus_sv08.sh
-``` 
-- Replace XXXXXXX with the `[mcu]` serial ID, and YYYYYYY with the `[extra mcu]` serial ID :
+```
+- Replace XXXXXXX with the `[mcu]` (mainboard) serial ID, and YYYYYYY with the `[extra mcu]` (toolhead) serial ID :
 
 *printer.cfg<br>*
 ![alt text](images/haa/haa_amu_printercfg.jpg)
@@ -664,9 +573,65 @@ cd "$HOME/klipper" && ./update_klipper_mcus_sv08.sh
 sudo shutdown -r now
 ```
 
-12. After the restart, you can *un*comment the `[adxl345]` and `[resonance_tester]` parts in your printer.cfg to have those functional again; you can also initialize the webcam through the Mainsail settings (Settings > Webcams > Add Webcam).
+12. After the restart, check that both MCUs now show up as `usb-Klipper_stm32f103xe_...`:
+```bash
+ls /dev/serial/by-id/
+```
 
-13. Enjoy mainline Klipper! 
+<br>
+
+# STEP 8 - INSTALL THE PRINTER CONFIGURATION AND CALIBRATE
+
+This step replaces the manual configuration (copying configs and Sovol addons) of the original guide. Details, commands and background: [sv08-loadcell/README.md](sv08-loadcell/README.md) (German).
+
+1. SSH (biqu/biqu) into the printer and run (as normal user, **not** with sudo):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/Jane0899/Sovol-SV08-Mainline/main/sv08-loadcell/get.sh | bash
+   ```
+
+   This clones this repository to `~/Sovol-SV08-Mainline` and starts the installer. The installer:
+   - checks Klipper, Moonraker, Mainsail and that both MCUs run Klipper firmware,
+   - **backs up** old configs and Sovol leftovers to `~/printer_data/backup/sv08-loadcell-<date>/` and removes them,
+   - installs the printer configuration, the Klipper module, numpy (input shaping) and Moonraker-timelapse,
+   - asks which MCU is the **mainboard** and which is the **toolhead** (your notes from Step 7.2), unless it can read them from an existing printer.cfg,
+   - on a former stock Sovol image: hardens Sovol's USB automount and asks what to do with G-code files on a USB stick,
+   - adds the updater to Moonraker, so future updates show up in Mainsail (Machine -> Update Manager),
+   - restarts Klipper and Moonraker.
+
+2. Clear the bed and have a sheet of paper ready. In Mainsail, open the console and run:
+
+   ```
+   CALIBRATE_SV08
+   ```
+
+   The wizard guides you through dialogs in Mainsail: sensor check, homing + QGL, measuring series for the inductive probe and the load cell, nozzle cleaning, Z zero point, paper test and input shaper. It takes about 30-40 minutes. At the end, **Save + Restart** stores all values. For a different print temperature: `CALIBRATE_SV08 TEMP=240`.
+
+3. Update the slicer start g-code:
+
+   - Go to OrcaSlicer/PrusaSlicer and edit the printer settings :<br>
+     -> Machine G-code<br>
+     -> Machine start G-code<br>
+     -> For OrcaSlicer, change your 'START_PRINT' line to this:<br>
+
+     ```gcode
+     START_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single]
+     ```
+
+     -> For PrusaSlicer/SuperSlicer, change your 'START_PRINT' line to this:<br>
+     ```gcode
+     START_PRINT EXTRUDER_TEMP=[first_layer_temperature] BED_TEMP=[first_layer_bed_temperature]
+     ```
+   - Machine end G-code: `END_PRINT`
+   - Want a **heatsoak** before the print? Add `HEATSOAK=1 SOAKTIME=15` (minutes) to the START_PRINT line.
+   - For timelapses, check 'Before layer change G-code' contains `TIMELAPSE_TAKE_FRAME`. Configure the timelapse in the Mainsail settings.
+
+4. Optional: add the webcam in Mainsail (Settings > Webcams > Add Webcam).
+
+5. Enjoy mainline Klipper!
+
+> [!NOTE]
+> The files in `/files-used/config/` and `/files-used/sovol-addons/` (manual configuration of the original guide) are not needed with this fork.
 
 <br>
 

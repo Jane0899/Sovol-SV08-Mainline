@@ -83,6 +83,14 @@ class SV08Loadcell:
         # Filament an der Düse verfälscht das Homing: seit dem Start noch nie
         # gereinigt oder Abstand Probe/Kontakt zu klein -> CLEAN_NOZZLE
         self.auto_clean = config.getboolean('auto_clean', True)
+        # Was LOADCELL_HOME bei Filament an der Düse tut (ON_BLOB): rough =
+        # grob über die Probe homen (normales G28), clean = reinigen und neu
+        # homen (AUTO_Z_OFFSET), error = abbrechen (Messreihen)
+        self.blob_mode = 'rough'
+        # Normales Homing (G28) fährt nur grob über die induktive Probe an.
+        # Die Düse auf der Wägezelle (genau) nur, wo es zählt: AUTO_Z_OFFSET,
+        # Messreihen des Assistenten (dort ROUGH=0)
+        self.home_precise = False
         # Abstand Probe/Düsenkontakt bei sauberer Düse, vom Assistenten
         # gemessen: contact_gap bei contact_gap_temp, Änderung pro Kelvin
         # contact_gap_coeff (die Düse dehnt sich). Liegt ein Homing mehr
@@ -241,11 +249,14 @@ class SV08Loadcell:
         speed = gcmd.get_float('SPEED', self.home_speed, above=0.)
         clearance = gcmd.get_float('CLEARANCE', self.home_clearance,
                                    minval=0.)
-        rough = gcmd.get_int('ROUGH', 0, minval=0, maxval=1)
-        auto_clean = gcmd.get_int('AUTO_CLEAN', int(self.auto_clean),
-                                  minval=0, maxval=1)
-        clean = self._clean_macro() if (auto_clean
-                                        and not self.cleaning) else None
+        rough = gcmd.get_int('ROUGH', 0 if self.home_precise else 1,
+                             minval=0, maxval=1)
+        on_blob = gcmd.get('ON_BLOB', self.blob_mode).lower()
+        if on_blob not in ('rough', 'clean', 'error'):
+            raise gcmd.error("LOADCELL_HOME: ON_BLOB=rough|clean|error")
+        clean = self._clean_macro() if (
+            on_blob == 'clean' and self.auto_clean
+            and not self.cleaning) else None
         gap = gcmd.get_float('GAP', self.probe_contact_gap)
         # Untergrenze für den gemessenen Abstand Probe/Kontakt. Der
         # Erwartungswert hängt von der Düsentemperatur ab und wird erst bei
@@ -253,14 +264,6 @@ class SV08Loadcell:
         modeled = (self.contact_gap is not None
                    and self.contact_gap_coeff is not None)
         min_gap, expected = gap, None
-        if (not modeled and clean is not None
-                and clean.variables.get('last_clean', 0) < 0):
-            # Ohne Bezugsabstand lässt sich Filament an der Düse nicht
-            # sicher erkennen: vor dem ersten Homing reinigen
-            gcmd.respond_info("LOADCELL_HOME: kein contact_gap kalibriert und"
-                              " seit dem Start nicht gereinigt - grob homen,"
-                              " CLEAN_NOZZLE, dann sauber homen")
-            rough = 1
         max_slow = gcmd.get_float('MAX_SLOW_TRAVEL', self.max_slow_travel,
                                   above=0.)
         kstatus = kin.get_status(eventtime)
@@ -298,7 +301,7 @@ class SV08Loadcell:
             if modeled:
                 expected = self._expected_gap(self._nozzle_temp())
                 min_gap = max(gap, expected - self.blob_tolerance)
-            if rough or clean is not None:
+            if True:  # rough_shift wird auch für die Fehlerpfade gebraucht
                 # Grob-Z aus der Probe (Filament an der Düse stört sie nicht):
                 # Kontakt bei z_probe - erwarteter Abstand. Ohne Kalibrierung
                 # nur die Untergrenze gap, die Düse steht dann eher höher
@@ -306,11 +309,9 @@ class SV08Loadcell:
                 rough_shift = pos_endstop - (z_probe - rough_gap)
             if rough:
                 self._set_rough_z(rough_shift)
-                if clean is not None:
-                    self._run_clean()
-                else:
-                    gcmd.respond_info("LOADCELL_HOME: grob über die Probe"
-                                      " gehomt (ohne Wägezelle)")
+                self.last_result.pop('probe_contact_gap', None)
+                gcmd.respond_info("LOADCELL_HOME: grob über die Probe"
+                                  " gehomt (ohne Wägezelle)")
                 return
             # 2. Düse über die Zelle, knapp über erwarteten Kontakt
             th.manual_move([None, None, lift_z],
@@ -325,12 +326,8 @@ class SV08Loadcell:
                 # Düse liegt schon an der Startposition auf
                 th.manual_move([None, None, lift_z],
                                self.lift_speed)
-                if self._clean_allowed(clean):
-                    gcmd.respond_info("LOADCELL_HOME: %s - reinige" % (e,))
-                    self._set_rough_z(rough_shift)
-                    self._run_clean()
-                    return
-                raise
+                self._on_blob(gcmd, on_blob, clean, rough_shift, str(e))
+                return
             # 3. Fein: Düse ganz langsam auf die Wägezelle
             pos = th.get_position()
             pos[2] = start - clearance - max_slow
@@ -344,19 +341,11 @@ class SV08Loadcell:
             if z_probe - z_cell < min_gap:
                 th.manual_move([None, None, lift_z],
                                self.lift_speed)
-                if self._clean_allowed(clean):
-                    gcmd.respond_info(
-                        "LOADCELL_HOME: Abstand Probe/Kontakt %.3f mm, erwartet"
-                        " mindestens %.3f mm - Filament an der Düse,"
-                        " reinige" % (z_probe - z_cell, min_gap))
-                    self._set_rough_z(rough_shift)
-                    self._run_clean()
-                    return
-                raise gcmd.error(
-                    "LOADCELL_HOME: Abstand Probe/Kontakt %.3f mm, erwartet"
-                    " mindestens %.3f mm - hängt Filament an der Düse? Düse"
-                    " reinigen und erneut homen" % (z_probe - z_cell,
-                                                    min_gap))
+                self._on_blob(gcmd, on_blob, clean, rough_shift,
+                              "Abstand Probe/Kontakt %.3f mm, erwartet"
+                              " mindestens %.3f mm" % (z_probe - z_cell,
+                                                       min_gap))
+                return
             # 4. Z so setzen, dass der Auslösepunkt = position_endstop ist
             pos = th.get_position()
             pos[2] += pos_endstop - z_cell
@@ -379,6 +368,23 @@ class SV08Loadcell:
     def _nozzle_temp(self):
         extruder = self.printer.lookup_object('extruder')
         return extruder.get_status(self.reactor.monotonic())['temperature']
+    def _on_blob(self, gcmd, on_blob, clean, rough_shift, why):
+        # Filament an der Düse: Die Wägezelle misst den Rest mit, die
+        # induktive Probe nicht. Grob-Z aus Probe + Abstandsmodell ist daher
+        # brauchbar (AUTO_Z_OFFSET misst Bett und Zelle ohnehin mit der Probe)
+        self.last_result.pop('probe_contact_gap', None)
+        if on_blob == 'error':
+            raise gcmd.error("LOADCELL_HOME: %s - hängt Filament an der"
+                             " Düse? Düse reinigen und erneut messen" % (why,))
+        if on_blob == 'clean' and self._clean_allowed(clean):
+            gcmd.respond_info("LOADCELL_HOME: %s - Filament an der Düse,"
+                              " reinige" % (why,))
+            self._set_rough_z(rough_shift)
+            self._run_clean()
+            return
+        self._set_rough_z(rough_shift)
+        gcmd.respond_info("LOADCELL_HOME: %s - Filament an der Düse? Grob über"
+                          " die Probe gehomt" % (why,))
     def _clean_macro(self):
         return self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None)
     def _expected_gap(self, temp):
@@ -419,7 +425,7 @@ class SV08Loadcell:
             if qgl is not None and not qgl.get_status(
                     self.reactor.monotonic()).get('applied'):
                 self.gcode.run_script_from_command(
-                    "QUAD_GANTRY_LEVEL\nLOADCELL_HOME ROUGH=1 AUTO_CLEAN=0")
+                    "QUAD_GANTRY_LEVEL\nLOADCELL_HOME ROUGH=1")
             try:
                 self.gcode.run_script_from_command(
                     "_CLEAN_NOZZLE_WIPE PASSES=2" if wipe is not None
@@ -434,7 +440,7 @@ class SV08Loadcell:
                     "LOADCELL_HOME: %s - weiter mit grobem Homing über die"
                     " Probe" % (e,))
                 self.gcode.run_script_from_command(
-                    "LOADCELL_HOME ROUGH=1 AUTO_CLEAN=0")
+                    "LOADCELL_HOME ROUGH=1")
         finally:
             self.cleaning = False
     # Automatischer Z-Offset
@@ -446,7 +452,13 @@ class SV08Loadcell:
         self.last_offset = None
         # Düse frisch auf die Zelle = Z-Referenz (über homing_override,
         # damit dessen Anheben danach gleich bleibt)
-        self.gcode.run_script_from_command("G28 Z")
+        # Bei Filament an der Düse hier reinigen (direkt vor der Messung),
+        # beim normalen G28 nicht
+        self.blob_mode, self.home_precise = 'clean', True
+        try:
+            self.gcode.run_script_from_command("G28 Z")
+        finally:
+            self.blob_mode, self.home_precise = 'rough', False
         probe, _ = self._probe()
         px, py, pz = probe.get_offsets()
         cx, cy = self.loadcell_xy
@@ -778,8 +790,7 @@ class SV08Loadcell:
         self._run("QUAD_GANTRY_LEVEL")
         self._run("G28 Z")
         self._next("2. Homing + QGL", [
-            "Erledigt. Abstand Probe/Kontakt beim Homing: %.3f mm."
-            % (self.last_result.get('probe_contact_gap', 0.),),
+            "Erledigt.",
             "Weiter: Messreihe der induktiven Probe (Geschwindigkeit x"
             " Rückzug, ca. 5-8 Minuten)."], 'PROBE_TUNE')
     # 3. Messreihe induktive Probe
@@ -930,7 +941,7 @@ class SV08Loadcell:
         # Abstand Probe/Kontakt warm (nach dem Reinigen) und heiß messen:
         # ergibt Bezugswert und Temperaturkoeffizient dieses Druckers
         while len(points) < self.GAP_SAMPLES:
-            self._run("LOADCELL_HOME")
+            self._run("LOADCELL_HOME ROUGH=0 ON_BLOB=error")
             self._add_gap_point()
         self._run("M109 S%d" % (self.wizard['temp'],))
         # Heiße Punkte erst nach einer Reinigung bei Drucktemperatur (wie in
@@ -941,7 +952,7 @@ class SV08Loadcell:
             self._run("CLEAN_NOZZLE MAX_AGE=0")
             self._add_gap_point()
         while len(points) < warm + self.GAP_SAMPLES:
-            self._run("LOADCELL_HOME")
+            self._run("LOADCELL_HOME ROUGH=0 ON_BLOB=error")
             self._add_gap_point()
         self._next("5. Düse heiß", [
             "Düse sauber und auf %d °C. Abstand Probe/Kontakt gemessen bei"

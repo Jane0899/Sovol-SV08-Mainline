@@ -105,6 +105,9 @@ class SV08Loadcell:
         self.z_correction = config.getfloat('z_correction', 0.)
         self.max_offset = config.getfloat('max_offset', 1., above=0.)
         self.last_offset = None
+        # Z-Anpassung aus dem Filamentprofil (FILAMENT_Z_ADJUST), zählt beim
+        # Übernehmen des Babysteps nicht mit
+        self.filament_adjust = 0.
         self.last_result = {}
         self.wizard = {'temp': 220}
         self.z_endstop = None
@@ -121,6 +124,9 @@ class SV08Loadcell:
                 ('AUTO_Z_OFFSET_SAVE_CORRECTION',
                  "Babystep seit dem letzten AUTO_Z_OFFSET als Korrektur"
                  " übernehmen (danach SAVE_CONFIG)"),
+                ('FILAMENT_Z_ADJUST',
+                 "Z-Anpassung fürs Filament setzen (Z=mm, absolut; Z=0 hebt"
+                 " sie auf). Zählt nicht als Babystep"),
                 ('LOADCELL_WAIT_RELEASE',
                  "Warten, bis die Wägezelle wieder frei meldet (statt G4)"),
                 ('LOADCELL_ACCURACY',
@@ -157,6 +163,7 @@ class SV08Loadcell:
     def get_status(self, eventtime):
         return {'z_correction': self.z_correction,
                 'last_offset': self.last_offset,
+                'filament_adjust': self.filament_adjust,
                 'last_result': self.last_result}
     # Hilfsfunktionen
     def _settings(self):
@@ -450,6 +457,7 @@ class SV08Loadcell:
             self.gcode.run_script_from_command("G28")
         self.gcode.run_script_from_command("SET_GCODE_OFFSET Z=0")
         self.last_offset = None
+        self.filament_adjust = 0.
         # Düse frisch auf die Zelle = Z-Referenz (über homing_override,
         # damit dessen Anheben danach gleich bleibt)
         # Bei Filament an der Düse hier reinigen (direkt vor der Messung),
@@ -493,16 +501,30 @@ class SV08Loadcell:
         gcode_move = self.printer.lookup_object('gcode_move')
         origin_z = gcode_move.get_status(
             self.reactor.monotonic())['homing_origin'].z
-        delta = origin_z - self.last_offset
+        # Was das Filamentprofil per FILAMENT_Z_ADJUST verstellt hat, ist kein
+        # Babystep
+        delta = origin_z - self.last_offset - self.filament_adjust
         old = self.z_correction
         self.z_correction = old - delta
-        self.last_offset = origin_z
+        self.last_offset = origin_z - self.filament_adjust
         configfile = self.printer.lookup_object('configfile')
         configfile.set(self.name, 'z_correction', "%.4f" % (self.z_correction,))
         gcmd.respond_info(
             "AUTO_Z_OFFSET: Babystep %+.4f -> Korrektur %.4f -> %.4f. Mit"
             " SAVE_CONFIG dauerhaft speichern." % (delta, old,
                                                   self.z_correction))
+    def cmd_FILAMENT_Z_ADJUST(self, gcmd):
+        # Für den Filament-Start-G-Code im Slicer statt SET_GCODE_OFFSET
+        # Z_ADJUST: absolut, wiederholbar, und AUTO_Z_OFFSET_SAVE_CORRECTION
+        # rechnet es heraus. Im Filament-End-G-Code: FILAMENT_Z_ADJUST Z=0
+        z = gcmd.get_float('Z', minval=-1., maxval=1.)
+        delta = z - self.filament_adjust
+        if delta:
+            self.gcode.run_script_from_command(
+                "SET_GCODE_OFFSET Z_ADJUST=%.6f MOVE=1" % (delta,))
+        self.filament_adjust = z
+        gcmd.respond_info("FILAMENT_Z_ADJUST: Filament-Anpassung %+.3f mm"
+                          % (z,))
     def cmd_LOADCELL_WAIT_RELEASE(self, gcmd):
         # Wartet nach Bewegungsende, bis der Sensor frei meldet - Fehler nach
         # TIMEOUT. Ersetzt ein starres G4 nach dem Antippen.

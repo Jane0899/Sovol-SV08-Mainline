@@ -62,7 +62,7 @@ Start-G-Code (OrcaSlicer):
 ```
 START_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single]
 ```
-End-G-Code: `END_PRINT`. Braucht ein Filament einen eigenen Z-Abstand, im Filament-Start-G-Code `FILAMENT_Z_ADJUST Z=0.015` (Wert in mm) und im Filament-End-G-Code `FILAMENT_Z_ADJUST Z=0`. Nicht `SET_GCODE_OFFSET Z_ADJUST`, das würde `AUTO_Z_OFFSET_SAVE_CORRECTION` als Babystep mitzählen. Für Timelapse unter „Before layer change“: `TIMELAPSE_TAKE_FRAME`.
+End-G-Code: `END_PRINT`. Braucht ein Filament einen eigenen Z-Abstand, im Filament-Start-G-Code `FILAMENT_Z_ADJUST Z=0.015` (Wert in mm). Zurückgesetzt wird automatisch in `END_PRINT`/`CANCEL_PRINT`, ein Filament-End-G-Code ist nicht nötig. Nicht `SET_GCODE_OFFSET Z_ADJUST`, das würde `AUTO_Z_OFFSET_SAVE_CORRECTION` als Babystep mitzählen. Für Timelapse unter „Before layer change“: `TIMELAPSE_TAKE_FRAME`.
 
 ## Dateien
 
@@ -80,7 +80,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 |---|---|
 | `CALIBRATE_SV08 [TEMP=220]` | Kalibrierungs-Assistent (einzelne Schritte: `STEP=SENSOR`, `HOME`, `PROBE_TUNE`, `LOADCELL_TUNE`, `HEAT`, `ZOFFSET`, `PAPER`, `SHAPER`, `FINISH`) |
 | `AUTO_Z_OFFSET` | Z-Offset messen und setzen (läuft in `START_PRINT` automatisch) |
-| `FILAMENT_Z_ADJUST Z=0.015` | Z-Anpassung fürs Filament (absolut, `Z=0` hebt sie auf). Gehört in den Filament-Start-G-Code des Slicers statt `SET_GCODE_OFFSET Z_ADJUST=…`, im Filament-End-G-Code `FILAMENT_Z_ADJUST Z=0`. Zählt nicht als Babystep |
+| `FILAMENT_Z_ADJUST Z=0.015` | Z-Anpassung fürs Filament (absolut, `Z=0` hebt sie auf). Gehört in den Filament-Start-G-Code des Slicers statt `SET_GCODE_OFFSET Z_ADJUST=…`. `END_PRINT`/`CANCEL_PRINT` setzen sie zurück. Zählt nicht als Babystep |
 | `AUTO_Z_OFFSET_SAVE_CORRECTION` | Babystep seit dem letzten `AUTO_Z_OFFSET` als Korrektur übernehmen, z.B. nach einer Feinkorrektur im Druck. Danach `SAVE_CONFIG` |
 | `MAINTENANCE_CALIBRATE_Z [TEMP=220]` | Z-Nullpunkt neu messen und speichern (ohne Papiertest) |
 | `LOADCELL_HOME` | Z homen (macht `G28` automatisch) |

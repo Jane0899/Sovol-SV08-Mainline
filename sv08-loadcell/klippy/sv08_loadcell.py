@@ -516,12 +516,14 @@ class SV08Loadcell:
     def cmd_FILAMENT_Z_ADJUST(self, gcmd):
         # Für den Filament-Start-G-Code im Slicer statt SET_GCODE_OFFSET
         # Z_ADJUST: absolut, wiederholbar, und AUTO_Z_OFFSET_SAVE_CORRECTION
-        # rechnet es heraus. Im Filament-End-G-Code: FILAMENT_Z_ADJUST Z=0
+        # rechnet es heraus. END_PRINT/CANCEL_PRINT setzen sie mit Z=0 MOVE=0
+        # zurück
         z = gcmd.get_float('Z', minval=-1., maxval=1.)
+        move = gcmd.get_int('MOVE', 1, minval=0, maxval=1)
         delta = z - self.filament_adjust
         if delta:
             self.gcode.run_script_from_command(
-                "SET_GCODE_OFFSET Z_ADJUST=%.6f MOVE=1" % (delta,))
+                "SET_GCODE_OFFSET Z_ADJUST=%.6f MOVE=%d" % (delta, move))
         self.filament_adjust = z
         gcmd.respond_info("FILAMENT_Z_ADJUST: Filament-Anpassung %+.3f mm"
                           % (z,))

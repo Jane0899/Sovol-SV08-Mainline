@@ -96,14 +96,12 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 
 ### Filament leer
 
-Eine kleine Zustandsmaschine (`_FILAMENT_STATE` in `sv08-macros.cfg`) kümmert sich darum. Ereignisse melden nur, was passiert ist: Der Filamentsensor meldet Runout und Einlegen, `START_PRINT` den Druckstart, `RESUME` das Fortsetzen, `END_PRINT`/`CANCEL_PRINT` das Ende. Was daraus folgt, entscheidet allein die Zustandsmaschine:
+- **Runout im Druck:** Klipper pausiert, und `_FILAMENT_RUNOUT` meldet „Filament leer“ in der Konsole, als Mainsail-Dialog und auf dem Display.
+- **Filament in der Pause eingelegt:** Meldung „Filament erkannt“ (`_FILAMENT_INSERT`).
+- **`RESUME` ohne Filament:** Die offizielle `mainsail.cfg` verweigert das Fortsetzen selbst, eingestellt über `_CLIENT_VARIABLE` in `sv08-macros.cfg`. Dort stehen auch Parkposition (X344 Y364), 10 mm Z-Hub und 1 mm Rückzug für Mainsails `PAUSE`/`RESUME`.
+- **Druckstart ohne Filament:** Der Sensor meldet nur Wechsel, merkt das also nicht. `START_PRINT` warnt deshalb gleich am Anfang und pausiert nach der Vorbereitung, vor der ersten Lage (`_FILAMENT_START_CHECK`).
 
-- **Runout im Druck:** Pause, Meldung „Filament leer“ in der Konsole, als Mainsail-Dialog und auf dem Display.
-- **Druckstart ohne Filament:** sofort eine Warnung, nach der Vorbereitung Pause.
-- **`RESUME` ohne Filament:** sofort wieder Pause, mit derselben Meldung. Der Sensor selbst meldet nur Wechsel, ohne dieses Ereignis würde in die Luft gedruckt.
-- **Filament in der Pause eingelegt:** Meldung „Filament erkannt“.
-
-Dafür braucht `[filament_switch_sensor filament_sensor]` in der `printer.cfg` die Zeilen `runout_gcode: _FILAMENT_RUNOUT` und `insert_gcode: _FILAMENT_INSERT` (Vorlage und Installer tragen sie ein). In einer eigenen `mainsail.cfg` gehört `_FILAMENT_STATE EVENT=RESUME` direkt hinter `RESUME_BASE`. Mit der offiziellen `mainsail.cfg` verweigert deren `RESUME` das Fortsetzen ohne Filament selbst (über `_CLIENT_VARIABLE`).
+Voraussetzungen: die offizielle `mainsail.cfg` (Symlink von KIAUH), und in `[filament_switch_sensor filament_sensor]` die Zeilen `runout_gcode: _FILAMENT_RUNOUT` und `insert_gcode: _FILAMENT_INSERT` (Vorlage und Installer tragen sie ein).
 
 ## Zurück zum alten Stand
 

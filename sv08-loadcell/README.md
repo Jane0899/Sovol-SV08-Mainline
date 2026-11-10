@@ -103,6 +103,10 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 
 Voraussetzungen: die offizielle `mainsail.cfg` (Symlink von KIAUH), und in `[filament_switch_sensor filament_sensor]` die Zeilen `runout_gcode: _FILAMENT_RUNOUT` und `insert_gcode: _FILAMENT_INSERT` (Vorlage und Installer tragen sie ein).
 
+### Nach einem Klipper-Update
+
+Nach einem Update von Klipper oder der MCU-Firmware `CALIBRATE_SV08` einmal laufen lassen (Papiertest überspringen). Am Referenzgerät hat sich beim Update von v0.13.0-572 auf -826 die Auslösehöhe der induktiven Probe um etwa 0,08 mm verschoben. Für den Z-Offset spielt das keine Rolle (Bett und Zelle werden gleich gemessen), aber das Abstandsmodell für die Filament-Erkennung muss neu gemessen werden.
+
 ## Zurück zum alten Stand
 
 Alles, was der Installer weggeräumt hat, liegt in `~/printer_data/backup/sv08-loadcell-<Datum>/` (Pfade relativ zum Home-Verzeichnis). Dazu gibt es `config-komplett.tar.gz`.

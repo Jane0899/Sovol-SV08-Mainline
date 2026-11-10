@@ -94,6 +94,10 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 - **Filament an der Düse** verfälscht die Messung auf der Wägezelle. Der Assistent misst den Abstand Probe/Düsenkontakt bei sauberer Düse warm und heiß und speichert Bezugswert, Temperaturkoeffizient und Toleranz (`contact_gap`, `contact_gap_coeff`, `blob_tolerance`). Liegt eine Messung in `AUTO_Z_OFFSET` darunter, reinigt es die Düse (`CLEAN_NOZZLE`, höchstens einmal pro Minute) und misst neu. Geht das nicht, wird grob über die Probe weitergemacht, mit Hinweis in der Konsole. `START_PRINT` reinigt ohnehin direkt vor `AUTO_Z_OFFSET` bei Drucktemperatur. Abschalten der Reinigung: `auto_clean: False` unter `[sv08_loadcell]`.
 - `AUTO_Z_OFFSET` bricht den Druck ab, wenn der gemessene Offset mehr als 1 mm von der Kalibrierung abweicht (`max_offset`).
 
+### Filament leer
+
+Meldet der Filamentsensor während des Drucks kein Filament mehr, pausiert Klipper und meldet „Filament leer“ in der Konsole, als Mainsail-Dialog und auf dem Display. `RESUME` verweigert das Weiterdrucken, solange der Sensor kein Filament sieht. Erkennt er während der Pause wieder Filament, kommt „Filament erkannt“. Dafür braucht `[filament_switch_sensor filament_sensor]` in der `printer.cfg` die Zeilen `runout_gcode: _FILAMENT_RUNOUT` und `insert_gcode: _FILAMENT_INSERT` (in der Vorlage enthalten). Mit der offiziellen `mainsail.cfg` prüft deren `RESUME` den Sensor über `_CLIENT_VARIABLE`. In einer eigenen `mainsail.cfg` gehört `_FILAMENT_RESUME_CHECK` an den Anfang von `RESUME`.
+
 ## Zurück zum alten Stand
 
 Alles, was der Installer weggeräumt hat, liegt in `~/printer_data/backup/sv08-loadcell-<Datum>/` (Pfade relativ zum Home-Verzeichnis). Dazu gibt es `config-komplett.tar.gz`.

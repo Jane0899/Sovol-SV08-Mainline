@@ -169,6 +169,8 @@ if [ $UPDATE_MODE = 0 ]; then
     echo "   printer.cfg aus Vorlage erstellt"
 fi
 [ -e "$CFG_DIR/saved_variables.cfg" ] || printf '[Variables]\n' > "$CFG_DIR/saved_variables.cfg"
+# Filamentsensor: Meldungen bei Runout/Einlegen (auch für bestehende printer.cfg)
+echo "   Filamentsensor: $($TOOL sensor-hooks "$CFG_DIR/printer.cfg")"
 
 say "Timelapse prüfen"
 if [ ! -d "$HOME/moonraker-timelapse" ]; then

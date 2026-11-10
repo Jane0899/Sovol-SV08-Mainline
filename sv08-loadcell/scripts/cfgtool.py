@@ -9,6 +9,8 @@
 #   cfgtool.py fill-template vorlage.cfg ziel.cfg MCU_SERIAL EXTRA_MCU_SERIAL
 #   cfgtool.py moonraker-add moonraker.conf REPO_PATH ORIGIN BRANCH
 #       [update_manager sv08-loadcell] eintragen, falls noch nicht vorhanden
+#   cfgtool.py sensor-hooks printer.cfg
+#       runout_gcode/insert_gcode im [filament_switch_sensor filament_sensor] ergänzen
 #   cfgtool.py moonraker-timelapse moonraker.conf
 #       [timelapse] und [update_manager timelapse] eintragen, falls noch nicht vorhanden
 import re, sys
@@ -92,6 +94,26 @@ def moonraker_timelapse(text):
             added.append(section)
     return text, added
 
+SENSOR_SECTION = "[filament_switch_sensor filament_sensor]"
+SENSOR_HOOKS = [("runout_gcode", "_FILAMENT_RUNOUT"),
+                ("insert_gcode", "_FILAMENT_INSERT")]
+
+def sensor_hooks(text):
+    main, auto = split(text)
+    i = main.find(SENSOR_SECTION)
+    if i < 0:
+        return text, []
+    j = main.find("\n[", i + 1)
+    j = len(main) if j < 0 else j
+    sec = main[i:j]
+    added = []
+    for opt, val in SENSOR_HOOKS:
+        if not re.search(r"^" + opt + r"\s*[:=]", sec, re.M):
+            sec = sec.replace(SENSOR_SECTION + "\n",
+                              SENSOR_SECTION + "\n%s: %s\n" % (opt, val), 1)
+            added.append(opt)
+    return main[:i] + sec + main[j:] + auto, added
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
     if cmd == "dedupe-autosave" and len(argv) == 3:
@@ -115,6 +137,11 @@ def main(argv):
         if added:
             open(argv[2], "w").write(new)
         print("eingetragen" if added else "schon vorhanden")
+    elif cmd == "sensor-hooks" and len(argv) == 3:
+        new, added = sensor_hooks(open(argv[2]).read())
+        if added:
+            open(argv[2], "w").write(new)
+        print("eingetragen: " + ", ".join(added) if added else "schon vorhanden")
     elif cmd == "moonraker-timelapse" and len(argv) == 3:
         new, added = moonraker_timelapse(open(argv[2]).read())
         if added:

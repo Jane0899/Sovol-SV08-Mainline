@@ -195,6 +195,9 @@ class SV08Loadcell:
     # Die Wägezelle meldet einen Kontakt erst ~0,2 s später. "Frei" zählt
     # deshalb erst, wenn es so lange durchgehend frei bleibt
     LOADCELL_SETTLE = .3
+    # Abfrageabstand des Wägezellen-Pins vom Host aus (jede Abfrage ist ein
+    # USB-Befehl). Die Zelle ändert sich nur etwa alle 80 ms
+    LOADCELL_POLL = .01
     # Assistent: Abstand Probe/Kontakt bei so vielen Temperaturen messen,
     # Mindestspanne für den Temperaturkoeffizienten
     GAP_SAMPLES = 3
@@ -216,7 +219,7 @@ class SV08Loadcell:
                 raise gcmd.error("Wägezelle nach %.1f s immer noch"
                                  " ausgelöst - liegt die Düse auf (Filament"
                                  " an der Düse?)" % (max_wait,))
-            self.reactor.pause(now + .001)
+            self.reactor.pause(now + self.LOADCELL_POLL)
     def _lift_to(self, z):
         if self.toolhead.get_position()[2] < z:
             self.toolhead.manual_move([None, None, z], self.lift_speed)
@@ -612,7 +615,8 @@ class SV08Loadcell:
                 if pt > end_pt + max_wait:
                     raise gcmd.error("Wägezelle nach %.1f s immer noch"
                                      " ausgelöst" % (max_wait,))
-                self.reactor.pause(self.reactor.monotonic() + .001)
+                self.reactor.pause(self.reactor.monotonic()
+                                   + self.LOADCELL_POLL)
             rel = pt - start_pt
             times.append(rel)
             if pt <= end_pt:

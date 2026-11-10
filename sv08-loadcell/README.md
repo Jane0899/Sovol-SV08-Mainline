@@ -96,7 +96,14 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 
 ### Filament leer
 
-Meldet der Filamentsensor während des Drucks kein Filament mehr, pausiert Klipper und meldet „Filament leer“ in der Konsole, als Mainsail-Dialog und auf dem Display. `RESUME` verweigert das Weiterdrucken, solange der Sensor kein Filament sieht. Erkennt er während der Pause wieder Filament, kommt „Filament erkannt“. Dafür braucht `[filament_switch_sensor filament_sensor]` in der `printer.cfg` die Zeilen `runout_gcode: _FILAMENT_RUNOUT` und `insert_gcode: _FILAMENT_INSERT` (in der Vorlage enthalten). Mit der offiziellen `mainsail.cfg` prüft deren `RESUME` den Sensor über `_CLIENT_VARIABLE`. In einer eigenen `mainsail.cfg` gehört `_FILAMENT_RESUME_CHECK` an den Anfang von `RESUME`.
+Eine kleine Zustandsmaschine (`_FILAMENT_STATE` in `sv08-macros.cfg`) kümmert sich darum. Ereignisse melden nur, was passiert ist: Der Filamentsensor meldet Runout und Einlegen, `START_PRINT` den Druckstart, `RESUME` das Fortsetzen, `END_PRINT`/`CANCEL_PRINT` das Ende. Was daraus folgt, entscheidet allein die Zustandsmaschine:
+
+- **Runout im Druck:** Pause, Meldung „Filament leer“ in der Konsole, als Mainsail-Dialog und auf dem Display.
+- **Druckstart ohne Filament:** sofort eine Warnung, nach der Vorbereitung Pause.
+- **`RESUME` ohne Filament:** sofort wieder Pause, mit derselben Meldung. Der Sensor selbst meldet nur Wechsel, ohne dieses Ereignis würde in die Luft gedruckt.
+- **Filament in der Pause eingelegt:** Meldung „Filament erkannt“.
+
+Dafür braucht `[filament_switch_sensor filament_sensor]` in der `printer.cfg` die Zeilen `runout_gcode: _FILAMENT_RUNOUT` und `insert_gcode: _FILAMENT_INSERT` (Vorlage und Installer tragen sie ein). In einer eigenen `mainsail.cfg` gehört `_FILAMENT_STATE EVENT=RESUME` direkt hinter `RESUME_BASE`. Mit der offiziellen `mainsail.cfg` verweigert deren `RESUME` das Fortsetzen ohne Filament selbst (über `_CLIENT_VARIABLE`).
 
 ## Zurück zum alten Stand
 

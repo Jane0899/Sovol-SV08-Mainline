@@ -14,7 +14,7 @@
 # Copyright (C) 2026  Jane0899
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import math
+import logging, math
 from . import probe as probe_mod
 
 def move_time(dist, speed, accel):
@@ -124,9 +124,6 @@ class SV08Loadcell:
                 ('AUTO_Z_OFFSET_SAVE_CORRECTION',
                  "Babystep seit dem letzten AUTO_Z_OFFSET als Korrektur"
                  " übernehmen (danach SAVE_CONFIG)"),
-                ('_RAISE_ERROR',
-                 "Fehler mit MSG=... auslösen (bricht das aufrufende Makro"
-                 " ab, ohne Makro-Kauderwelsch in der Meldung)"),
                 ('FILAMENT_Z_ADJUST',
                  "Z-Anpassung fürs Filament setzen (Z=mm, absolut; Z=0 hebt"
                  " sie auf). Zählt nicht als Babystep"),
@@ -516,8 +513,6 @@ class SV08Loadcell:
             "AUTO_Z_OFFSET: Babystep %+.4f -> Korrektur %.4f -> %.4f. Mit"
             " SAVE_CONFIG dauerhaft speichern." % (delta, old,
                                                   self.z_correction))
-    def cmd__RAISE_ERROR(self, gcmd):
-        raise gcmd.error(gcmd.get('MSG', 'Abgebrochen'))
     def cmd_FILAMENT_Z_ADJUST(self, gcmd):
         # Für den Filament-Start-G-Code im Slicer statt SET_GCODE_OFFSET
         # Z_ADJUST: absolut, wiederholbar, und AUTO_Z_OFFSET_SAVE_CORRECTION

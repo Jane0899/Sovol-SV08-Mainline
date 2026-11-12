@@ -14,7 +14,7 @@
 # Copyright (C) 2026  Jane0899
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, math
+import logging, math, time
 from . import probe as probe_mod
 
 def move_time(dist, speed, accel):
@@ -61,6 +61,9 @@ class SV08Loadcell:
         self.reactor = self.printer.get_reactor()
         self.gcode = self.printer.lookup_object('gcode')
         self.name = config.get_name()
+        # Z zuletzt genau auf der Wägezelle gehomt (nicht grob, seitdem keine
+        # Verschiebung gemessen). TAP_TEST homt dann nicht noch einmal
+        self.z_precise = False
         # Düsenposition über der Wägezelle
         self.loadcell_xy = config.getfloatlist('loadcell_xy_position',
                                                (289., 361.), count=2)
@@ -205,6 +208,12 @@ class SV08Loadcell:
     # Mindestspanne für den Temperaturkoeffizienten
     GAP_SAMPLES = 3
     GAP_MIN_SPAN = 30.
+    # Messpunkte Abstand Probe/Kontakt: warm (gehalten), kalt (abkühlen bis unter)
+    GAP_COLD_TEMP = 50.
+    GAP_WARM_TEMP = 130.
+    # Filament-Grenze, wo das Modell unsicher ist (Messreihe, TAP_TEST kalt).
+    # Ein echter Blob kostet deutlich mehr (gemessen: 0,36 mm)
+    TAP_BLOB_TOL = .15
     def _wait_release(self, gcmd, max_wait, settle=0.):
         self.toolhead.wait_moves()
         start = self.reactor.monotonic()
@@ -257,6 +266,7 @@ class SV08Loadcell:
         homed = th.get_status(eventtime)['homed_axes']
         if 'x' not in homed or 'y' not in homed:
             raise gcmd.error("LOADCELL_HOME: erst X und Y homen")
+        self.z_precise = False
         coarse_speed = gcmd.get_float('COARSE_SPEED', self.coarse_speed,
                                       above=0.)
         speed = gcmd.get_float('SPEED', self.home_speed, above=0.)
@@ -264,6 +274,14 @@ class SV08Loadcell:
                                    minval=0.)
         rough = gcmd.get_int('ROUGH', 0 if self.home_precise else 1,
                              minval=0, maxval=1)
+        if not rough and not self.cleaning and self._nozzle_dirty():
+            # Nach einem Druck hängt Filament an der Düse: erst reinigen
+            gcmd.respond_info("LOADCELL_HOME: seit dem Druck nicht gereinigt"
+                              " - reinige vor dem Antippen")
+            if 'z' not in homed:
+                self.gcode.run_script_from_command("LOADCELL_HOME ROUGH=1")
+            self._run_clean()
+            homed = self._homed()
         on_blob = gcmd.get('ON_BLOB', self.blob_mode).lower()
         if on_blob not in ('rough', 'clean', 'error'):
             raise gcmd.error("LOADCELL_HOME: ON_BLOB=rough|clean|error")
@@ -271,6 +289,9 @@ class SV08Loadcell:
             on_blob == 'clean' and self.auto_clean
             and not self.cleaning) else None
         gap = gcmd.get_float('GAP', self.probe_contact_gap)
+        # Grenze für die Filament-Erkennung. Größer, wo das Modell unsicher
+        # ist (kalte Düse unterhalb der kalibrierten Temperaturen)
+        blob_tol = gcmd.get_float('BLOB_TOL', self.blob_tolerance, above=0.)
         # Untergrenze für den gemessenen Abstand Probe/Kontakt. Der
         # Erwartungswert hängt von der Düsentemperatur ab und wird erst bei
         # der Messung berechnet (beim Druckstart heizt die Düse gerade)
@@ -315,7 +336,7 @@ class SV08Loadcell:
             lift_z = min(z_probe + self.xy_lift, z_max)
             if modeled:
                 expected = self._expected_gap(self._nozzle_temp())
-                min_gap = max(gap, expected - self.blob_tolerance)
+                min_gap = max(gap, expected - blob_tol)
             if True:  # rough_shift wird auch für die Fehlerpfade gebraucht
                 # Grob-Z aus der Probe (Filament an der Düse stört sie nicht):
                 # Kontakt bei z_probe - erwarteter Abstand. Ohne Kalibrierung
@@ -349,7 +370,7 @@ class SV08Loadcell:
             z_cell = phoming.probing_move(self.z_endstop, pos, speed)[2]
             if modeled:
                 expected = self._expected_gap(self._nozzle_temp())
-                min_gap = max(gap, expected - self.blob_tolerance)
+                min_gap = max(gap, expected - blob_tol)
             # Der Abstand Probe/Düsenkontakt ist mechanisch fest (nur
             # temperaturabhängig). Ist er kleiner als erwartet, hat etwas
             # anderes die Zelle zuerst berührt
@@ -358,8 +379,9 @@ class SV08Loadcell:
                                self.lift_speed)
                 self._on_blob(gcmd, on_blob, clean, rough_shift,
                               "Abstand Probe/Kontakt %.3f mm, erwartet"
-                              " mindestens %.3f mm" % (z_probe - z_cell,
-                                                       min_gap))
+                              " mindestens %.3f mm%s" % (
+                                  z_probe - z_cell, min_gap,
+                                  self._head_temp_info()))
                 return
             # Verschiebung gegenüber dem alten Nullpunkt (Schrittverlust?):
             # der Kontaktpunkt im alten Koordinatensystem minus position_endstop
@@ -377,16 +399,26 @@ class SV08Loadcell:
         except:
             kin.clear_homing_state("z")
             raise
+        self.z_precise = True
         self.last_result['probe_contact_gap'] = z_probe - z_cell
         self.last_result['probe_contact_gap_temp'] = self._nozzle_temp()
         gcmd.respond_info(
             "LOADCELL_HOME: Probe bei %.4f, Wägezelle bei %.4f -> Abstand"
             " Probe/Kontakt %.4f mm (%s), langsame Anfahrt"
-            " %.3f mm mit %.2f mm/s, Z=%.3f gesetzt"
+            " %.3f mm mit %.2f mm/s, Z=%.3f gesetzt%s"
             % (z_probe, z_cell, z_probe - z_cell,
                "erwartet %.3f bei %.0f °C" % (expected, self._nozzle_temp())
                if expected is not None else "mindestens %.3f" % (min_gap,),
-               start - z_cell, speed, pos_endstop))
+               start - z_cell, speed, pos_endstop, self._head_temp_info()))
+    def _head_temp_info(self):
+        # Kopftemperatur (Sensor am Kopf-MCU, nahe der Probe): um zu sehen,
+        # ob der Abstand Probe/Kontakt mit der Probe-Temperatur driftet
+        sensor = self.printer.lookup_object(
+            'temperature_sensor Toolhead_Temp', None)
+        if sensor is None:
+            return ""
+        t = sensor.get_status(self.reactor.monotonic()).get('temperature')
+        return " (Kopf %.1f °C)" % (t,) if t is not None else ""
     def _nozzle_temp(self):
         extruder = self.printer.lookup_object('extruder')
         return extruder.get_status(self.reactor.monotonic())['temperature']
@@ -407,6 +439,10 @@ class SV08Loadcell:
         self._set_rough_z(rough_shift)
         gcmd.respond_info("LOADCELL_HOME: %s - Filament an der Düse? Grob über"
                           " die Probe gehomt" % (why,))
+    def _nozzle_dirty(self):
+        m = self._clean_macro()
+        return bool(m is not None and m.get_status(
+            self.reactor.monotonic()).get('dirty', 0))
     def _clean_macro(self):
         return self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None)
     def _expected_gap(self, temp):
@@ -425,6 +461,7 @@ class SV08Loadcell:
             self.reactor.monotonic())['estimated_print_time']
         return now - last
     def _set_rough_z(self, shift):
+        self.z_precise = False
         th = self.toolhead
         pos = th.get_position()
         pos[2] += shift
@@ -549,12 +586,34 @@ class SV08Loadcell:
         cell = gcmd.get_int('CELL', 0, minval=0, maxval=1)
         v = gcmd.get_float('TAP_SPEED', 30., above=0., maxval=50.)
         above = gcmd.get_float('ABOVE', 1., above=.2, maxval=3.)
-        over = gcmd.get_float('OVERTRAVEL', .08, above=0., maxval=.15)
+        # Tiefer nur bei langsamer Fahrt (Lüfter-Methode): die Düse drückt
+        # dann sanft in die Platte statt aufzuschlagen
+        over = gcmd.get_float('OVERTRAVEL', .08, above=0.,
+                              maxval=.3 if v <= 1. else .15)
         # Z-Beschleunigung nur für die Tippfahrt: kurze Bremsrampe, damit die
         # Düse mit fast voller Geschwindigkeit aufsetzt (die Probe stoppt bei
         # jeder Messung ähnlich hart, bis 50 mm/s ohne Schrittverlust)
-        tap_accel = gcmd.get_float('TAP_ACCEL', 10000., above=0.)
-        min_peak = gcmd.get_float('MIN_PEAK', 1500., above=0.)
+        # Bis 50000: die Probe stoppt bis 50 mm/s schlagartig ohne
+        # Schrittverlust (Messreihe Okt. 2026), ein Bremsweg von v²/2a ist
+        # dagegen sanft
+        tap_accel = gcmd.get_float('TAP_ACCEL', 10000., above=0.,
+                                   maxval=50000.)
+        min_peak = gcmd.get_float('MIN_PEAK', 5000., above=0.)
+        # Aufprall erst ab so weit über der Vorhersage suchen: davor liegt
+        # die Anfahrt mit ihrem Ruck
+        window = gcmd.get_float('WINDOW', .3, above=0.)
+        dump = gcmd.get_int('DUMP', 0, minval=0, maxval=1)
+        if self._nozzle_dirty():
+            # Nach einem Druck vor dem Antippen reinigen, dann kalt blasen
+            gcmd.respond_info("TAP_TEST: seit dem Druck nicht gereinigt -"
+                              " reinige und kühle ab")
+            if 'z' not in self._homed():
+                self.gcode.run_script_from_command("G28")
+            self._run_clean()
+            for c in ("M106 S255", "M106 P1 S255",
+                      "TEMPERATURE_WAIT SENSOR=extruder MAXIMUM=55",
+                      "M106 S0", "M106 P1 S0"):
+                self.gcode.run_script_from_command(c)
         if self._nozzle_temp() > 60.:
             raise gcmd.error("TAP_TEST nur mit kalter Düse (unter 60 °C)")
         chip = self.printer.lookup_object('adxl345', None)
@@ -563,9 +622,15 @@ class SV08Loadcell:
         homed = self._homed()
         if 'x' not in homed or 'y' not in homed:
             self.gcode.run_script_from_command("G28")
-        # Z genau auf der Wägezelle (normales G28 homt nur grob)
-        self.gcode.run_script_from_command(
-            "LOADCELL_HOME ROUGH=0 ON_BLOB=error")
+        # Z genau auf der Wägezelle (normales G28 homt nur grob). Nur wenn
+        # nötig: Die Düsenhöhe ändert sich nur bei Schrittverlust, und den
+        # prüft jeder Test danach mit der Probe
+        if (gcmd.get_int('HOME', 0, minval=0, maxval=1) or not self.z_precise
+                or 'z' not in self._homed()):
+            self.gcode.run_script_from_command(
+                "LOADCELL_HOME ROUGH=0 ON_BLOB=error BLOB_TOL=%.3f"
+                % (gcmd.get_float('BLOB_TOL', self.TAP_BLOB_TOL, above=0.),))
+        home_gap = self.last_result.get('probe_contact_gap')
         endstop = self._settings()['stepper_z']['position_endstop']
         if cell:
             x, y = self.loadcell_xy
@@ -577,8 +642,7 @@ class SV08Loadcell:
             bed_z = self._probe_at(gcmd, x, y)
             predicted = bed_z - sensor_z + endstop - self.z_correction
         kin = th.get_kinematics()
-        accel = min(tap_accel, th.get_status(
-            self.reactor.monotonic())['max_accel'])
+        accel = tap_accel
         z_start = predicted + above
         z_end = predicted - over
         self._lift_to(z_start + 2.)
@@ -589,22 +653,28 @@ class SV08Loadcell:
         th.dwell(.2)
         th.wait_moves()
         t0 = th.get_last_move_time()
-        old_accel = kin.max_z_accel
-        kin.max_z_accel = accel
+        # Nur für diese eine Fahrt: Z- und Kopf-Beschleunigung hoch (die
+        # Fahrt holt sich max_accel vom Kopf, gedeckelt durch max_z_accel)
+        old_accel = kin.max_z_accel, th.max_accel
+        kin.max_z_accel = th.max_accel = accel
         try:
             th.manual_move([None, None, z_end], v)
             t1 = th.get_last_move_time()
             th.wait_moves()
         finally:
-            kin.max_z_accel = old_accel
+            kin.max_z_accel, th.max_accel = old_accel
         th.dwell(.2)
         aclient.finish_measurements()
         th.manual_move([None, None, z_start + 2.], self.lift_speed)
-        contact, diag = self._find_tap(aclient.get_samples(), t0, t1, z_start,
-                                       z_end, v, accel, min_peak)
+        contact, diag = self._find_tap(
+            aclient.get_samples(), t0, t1, z_start, z_end, v, accel,
+            min_peak, predicted + window,
+            "/tmp/tap_test_%s.csv" % (time.strftime("%Y%m%d_%H%M%S"),)
+            if dump else None)
         # Schrittverlust? Dieselbe Stelle noch einmal mit der Probe messen
         shift = self._probe_at(gcmd, x, y) - bed_z
         if abs(shift) > .02:
+            self.z_precise = False
             raise gcmd.error("TAP_TEST: Z hat sich beim Tippen um %+.3f mm"
                              " verschoben (Schrittverlust) - Messung ungültig"
                              % (shift,))
@@ -618,11 +688,14 @@ class SV08Loadcell:
         gcmd.respond_info(
             "TAP_TEST X%.1f Y%.1f: Vorhersage %.3f, Düse berührt bei %.3f ->"
             " Abweichung %+.3f mm (Aufprall mit %.1f mm/s, Rauschen %.0f,"
-            " Ausschlag %.0f mm/s², Z-Kontrolle danach %+.3f mm)" % (
+            " Ausschlag %.0f mm/s², Z-Kontrolle danach %+.3f mm, Abstand"
+            " Probe/Kontakt beim Homing %.3f mm)" % (
                 x, y, predicted, z_contact, z_contact - predicted,
                 min(v, math.sqrt(2. * accel * max(0., z_contact - z_end))),
-                sigma, peak, shift))
-    def _find_tap(self, samples, t0, t1, z_start, z_end, v, accel, min_peak):
+                sigma, peak, shift, home_gap or 0.)
+            + (" - " + diag if dump else ""))
+    def _find_tap(self, samples, t0, t1, z_start, z_end, v, accel, min_peak,
+                  z_window, dump_path):
         # Fahrkurve (trapezförmig oder dreieckig: beschleunigen, ggf. konstant,
         # bremsen) für die Zeit -> Z-Zuordnung
         dist = z_start - z_end
@@ -654,19 +727,29 @@ class SV08Loadcell:
             return math.sqrt(sum((getattr(s, a) - b) ** 2
                                  for a, b in zip(axes, base)))
         sigma = med([dev(s) for s in rest]) * 1.5 + 1.
-        # Bewegung selbst bringt bis zu accel (Beschleunigen/Bremsen)
-        thresh = max(8. * sigma, accel + min_peak)
-        cand = [s for s in samples if t0 < s.time <= t1 + .05]
+        # Anfahrt und Bremsen liegen außerhalb des Suchfensters, dazwischen
+        # fährt die Düse gleichförmig: feste Schwelle über dem Rauschen
+        thresh = max(8. * sigma, min_peak)
+        if dump_path:
+            with open(dump_path, 'w') as f:
+                f.write("t,z,ax,ay,az,dev\n")
+                for s in samples:
+                    if t0 - .2 < s.time <= t1 + .2:
+                        f.write("%.5f,%.4f,%.0f,%.0f,%.0f,%.0f\n" % (
+                            s.time - t0, z_at(s.time), s.accel_x, s.accel_y,
+                            s.accel_z, dev(s)))
+        # Nur bis zum Beginn der Bremsrampe: das Bremsen selbst ruckt auch
+        t_brake = t0 + ta + tc
+        cand = [s for s in samples if t0 < s.time <= t_brake
+                and z_at(s.time) <= z_window]
         if not cand:
             return None, "keine Messwerte während der Fahrt"
         top = max(cand, key=dev)
-        diag = "Rauschen %.0f, größter Ausschlag %.0f mm/s² bei Z %.3f" % (
-            sigma, dev(top), z_at(top.time))
+        diag = "Rauschen %.0f, größter Ausschlag %.0f mm/s² bei Z %.3f%s" % (
+            sigma, dev(top), z_at(top.time),
+            ", Messwerte in " + dump_path if dump_path else "")
         for i in range(len(cand) - 1):
             if dev(cand[i]) > thresh and dev(cand[i + 1]) > thresh:
-                if cand[i].time > t1:
-                    # erst nach Fahrtende: kein Aufprall
-                    return None, diag
                 peak = max(dev(c) for c in cand[i:i + 20])
                 return (z_at(cand[i].time), sigma, peak), diag
         return None, diag
@@ -1109,33 +1192,50 @@ class SV08Loadcell:
             % (latency, period * 1000., release),
             "Feinannäherung: %.2f mm/s (Ziel: Streuung <= %.3f mm)."
             % (speed, self.LOADCELL_TARGET_RANGE),
-            "Weiter: Düse reinigen (260 °C) und auf %d °C heizen."
-            % (self.wizard['temp'],)], 'HEAT')
+            "Weiter: Abstand Probe/Kontakt heiß, warm und kalt messen"
+            " (reinigen, abkühlen, wieder aufheizen, ca. 30 min)."], 'HEAT')
     # 5. Düse reinigen + heizen
     def _wz_heat(self, gcmd):
         self._prompt_end()
         self._ensure_leveled()
         points = self.wizard['gap_points'] = []
-        if self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None):
-            # endet mit LOADCELL_HOME bei sauberer, noch warmer Düse
-            self._run("CLEAN_NOZZLE MAX_AGE=0")
-            self._add_gap_point()
-        # Abstand Probe/Kontakt warm (nach dem Reinigen) und heiß messen:
-        # ergibt Bezugswert und Temperaturkoeffizient dieses Druckers
-        while len(points) < self.GAP_SAMPLES:
-            self._run("LOADCELL_HOME ROUGH=0 ON_BLOB=error")
-            self._add_gap_point()
-        self._run("M109 S%d" % (self.wizard['temp'],))
-        # Heiße Punkte erst nach einer Reinigung bei Drucktemperatur (wie in
-        # START_PRINT): sonst hängt, was beim Aufheizen nachgelaufen ist, an
-        # der Düse und verfälscht den Bezugsabstand
-        warm = len(points)
-        if self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None):
-            self._run("CLEAN_NOZZLE MAX_AGE=0")
-            self._add_gap_point()
-        while len(points) < warm + self.GAP_SAMPLES:
-            self._run("LOADCELL_HOME ROUGH=0 ON_BLOB=error")
-            self._add_gap_point()
+        # Abstand Probe/Kontakt bei drei Temperaturen: heiß, warm, kalt.
+        # Ergibt Bezugswert und Temperaturkoeffizient dieses Druckers.
+        # Gemessen wird nur beim Abkühlen: beim Aufheizen läuft Filament nach.
+        # Während der Messreihe gilt nur eine grobe Filament-Grenze, das alte
+        # Modell kann für diesen Drucker noch falsch sein
+        home = "LOADCELL_HOME ROUGH=0 ON_BLOB=error BLOB_TOL=%.3f" % (
+            self.TAP_BLOB_TOL,)
+        def clean_hot():
+            # Reinigung bei Drucktemperatur wie in START_PRINT, endet mit
+            # Homing: sonst hängt, was beim Aufheizen nachgelaufen ist, an
+            # der Düse und verfälscht den Abstand
+            self._run("M109 S%d" % (self.wizard['temp'],))
+            if self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None):
+                self._run("CLEAN_NOZZLE MAX_AGE=0")
+                self._add_gap_point()
+        def measure(n):
+            while len(points) < n:
+                self._run(home)
+                self._add_gap_point()
+        def cool_to(temp, hold):
+            self._run("M104 S%.0f" % (hold,))
+            self._run("M106 S255")
+            self._run("M106 P1 S255")
+            self._run("TEMPERATURE_WAIT SENSOR=extruder MAXIMUM=%.0f"
+                      % (temp,))
+            self._run("M106 S0")
+            self._run("M106 P1 S0")
+            if hold:
+                self._run("M109 S%.0f" % (hold,))
+        clean_hot()
+        measure(self.GAP_SAMPLES)
+        cool_to(self.GAP_WARM_TEMP, self.GAP_WARM_TEMP)
+        measure(2 * self.GAP_SAMPLES)
+        cool_to(self.GAP_COLD_TEMP, 0)
+        measure(3 * self.GAP_SAMPLES)
+        # Für den Z-Nullpunkt wieder heiß und sauber
+        clean_hot()
         self._next("5. Düse heiß", [
             "Düse sauber und auf %d °C. Abstand Probe/Kontakt gemessen bei"
             " %s °C." % (self.wizard['temp'], ", ".join(

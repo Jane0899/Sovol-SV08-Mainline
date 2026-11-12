@@ -129,15 +129,19 @@ fi
 # Sovols USB-Automount (Werks-Image) führt beim Einstecken eines Sticks als root
 # test.sh aus, verbindet WLAN aus wifi.cfg und installiert .deb-Pakete -> härten
 AUTOMOUNT=/usr/bin/makerbase-automount
-if [ -f "$AUTOMOUNT" ] && grep -qE 'test\.sh|dpkg|nmcli' "$AUTOMOUNT"; then
+tmp="$(mktemp)"
+sed -e "s#__UID__#$(id -u)#; s#__GID__#$(id -g)#; s#__HOME__#$HOME#g" \
+    "$LC_DIR/system/makerbase-automount" > "$tmp"
+# auch ältere/abweichende Fassungen ersetzen, damit alle Drucker dasselbe Skript haben
+if [ -f "$AUTOMOUNT" ] && ! cmp -s "$tmp" "$AUTOMOUNT"; then
     say "Härte Sovols USB-Automount (test.sh, WLAN, .deb-Installation entfernt)"
     mkdir -p "$BACKUP_DIR/usr/bin"
     cp "$AUTOMOUNT" "$BACKUP_DIR/usr/bin/makerbase-automount"
-    tmp="$(mktemp)"
-    sed -e "s#__UID__#$(id -u)#; s#__GID__#$(id -g)#; s#__HOME__#$HOME#g" \
-        "$LC_DIR/system/makerbase-automount" > "$tmp"
     sudo install -m 0755 -o root -g root "$tmp" "$AUTOMOUNT"
-    rm -f "$tmp"
+    echo "   alte Fassung gesichert: $BACKUP_DIR/usr/bin/makerbase-automount"
+fi
+rm -f "$tmp"
+if [ -f "$AUTOMOUNT" ] && [ ! -f /etc/default/sv08-usbmount ]; then
     usb_mode=move
     if [ $ASSUME_YES = 0 ]; then
         echo "Was soll mit G-Code-Dateien auf einem eingesteckten USB-Stick passieren?"
@@ -150,7 +154,6 @@ if [ -f "$AUTOMOUNT" ] && grep -qE 'test\.sh|dpkg|nmcli' "$AUTOMOUNT"; then
     printf '# move | copy | mount, siehe /usr/bin/makerbase-automount\nUSB_MODE=%s\n' "$usb_mode" |
         sudo tee /etc/default/sv08-usbmount >/dev/null
     echo "   USB-Modus: $usb_mode (änderbar in /etc/default/sv08-usbmount)"
-    echo "   alte Fassung gesichert: $BACKUP_DIR/usr/bin/makerbase-automount"
 fi
 
 # ---------------------------------------------------------------- 3. Einspielen

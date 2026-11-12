@@ -214,6 +214,11 @@ class SV08Loadcell:
     # Filament-Grenze, wo das Modell unsicher ist (Messreihe, TAP_TEST kalt).
     # Ein echter Blob kostet deutlich mehr (gemessen: 0,36 mm)
     TAP_BLOB_TOL = .15
+    # Direkt nach einer Reinigung gilt erst so viel unter dem erwarteten
+    # Abstand als Filament (sonst Drift): grob homen setzte Z sonst um die
+    # Differenz zu tief (beobachtet: 0,03-0,07 mm, schlechte Haftung)
+    FRESH_CLEAN_AGE = 120.
+    FRESH_BLOB_TOL = .1
     def _wait_release(self, gcmd, max_wait, settle=0.):
         self.toolhead.wait_moves()
         start = self.reactor.monotonic()
@@ -374,7 +379,19 @@ class SV08Loadcell:
             # Der Abstand Probe/Düsenkontakt ist mechanisch fest (nur
             # temperaturabhängig). Ist er kleiner als erwartet, hat etwas
             # anderes die Zelle zuerst berührt
-            if z_probe - z_cell < min_gap:
+            fresh = self._fresh_clean()
+            if (z_probe - z_cell < min_gap and fresh is not None
+                    and expected is not None and z_probe - z_cell
+                    >= max(gap, expected - self.FRESH_BLOB_TOL)):
+                # Gerade gereinigt (START_PRINT): knapp unter der Grenze ist
+                # eher Drift des Abstands als Filament. Grob homen hieße
+                # dann, Z um genau diese Differenz zu tief zu setzen
+                gcmd.respond_info(
+                    "LOADCELL_HOME: Abstand Probe/Kontakt %.3f mm knapp unter"
+                    " %.3f mm, Düse aber vor %.0f s gereinigt - genaue"
+                    " Messung gilt%s" % (z_probe - z_cell, min_gap, fresh,
+                                          self._head_temp_info()))
+            elif z_probe - z_cell < min_gap:
                 th.manual_move([None, None, lift_z],
                                self.lift_speed)
                 self._on_blob(gcmd, on_blob, clean, rough_shift,
@@ -451,6 +468,14 @@ class SV08Loadcell:
     def _clean_allowed(self, clean):
         age = self._clean_age(clean) if clean is not None else None
         return clean is not None and (age is None or age > 60.)
+    def _fresh_clean(self):
+        # Sekunden seit der letzten Reinigung, wenn das höchstens
+        # FRESH_CLEAN_AGE her ist, sonst None
+        clean = self._clean_macro()
+        if clean is None:
+            return None
+        age = self._clean_age(clean)
+        return age if age is not None and age <= self.FRESH_CLEAN_AGE else None
     def _clean_age(self, clean):
         # Sekunden seit der letzten Reinigung, None = noch nie. Direkt nach
         # einer Reinigung nicht noch einmal reinigen (Schleife)

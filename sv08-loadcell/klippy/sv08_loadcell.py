@@ -553,7 +553,7 @@ class SV08Loadcell:
         # Z-Beschleunigung nur für die Tippfahrt: kurze Bremsrampe, damit die
         # Düse mit fast voller Geschwindigkeit aufsetzt (die Probe stoppt bei
         # jeder Messung ähnlich hart, bis 50 mm/s ohne Schrittverlust)
-        tap_accel = gcmd.get_float('TAP_ACCEL', 3000., above=0., maxval=6000.)
+        tap_accel = gcmd.get_float('TAP_ACCEL', 10000., above=0.)
         min_peak = gcmd.get_float('MIN_PEAK', 1500., above=0.)
         if self._nozzle_temp() > 60.:
             raise gcmd.error("TAP_TEST nur mit kalter Düse (unter 60 °C)")
@@ -570,6 +570,7 @@ class SV08Loadcell:
         if cell:
             x, y = self.loadcell_xy
             predicted = endstop
+            bed_z = self._probe_at(gcmd, x, y)
         else:
             x = gcmd.get_float('X'); y = gcmd.get_float('Y')
             sensor_z = self._probe_at(gcmd, *self.loadcell_xy)
@@ -601,11 +602,9 @@ class SV08Loadcell:
         th.manual_move([None, None, z_start + 2.], self.lift_speed)
         contact, diag = self._find_tap(aclient.get_samples(), t0, t1, z_start,
                                        z_end, v, accel, min_peak)
-        # Schrittverlust? Genau neu homen und Verschiebung von Z prüfen
-        self.gcode.run_script_from_command(
-            "LOADCELL_HOME ROUGH=0 ON_BLOB=error")
-        shift = self.last_result.get('home_shift')
-        if shift is not None and abs(shift) > .02:
+        # Schrittverlust? Dieselbe Stelle noch einmal mit der Probe messen
+        shift = self._probe_at(gcmd, x, y) - bed_z
+        if abs(shift) > .02:
             raise gcmd.error("TAP_TEST: Z hat sich beim Tippen um %+.3f mm"
                              " verschoben (Schrittverlust) - Messung ungültig"
                              % (shift,))
@@ -622,7 +621,7 @@ class SV08Loadcell:
             " Ausschlag %.0f mm/s², Z-Kontrolle danach %+.3f mm)" % (
                 x, y, predicted, z_contact, z_contact - predicted,
                 min(v, math.sqrt(2. * accel * max(0., z_contact - z_end))),
-                sigma, peak, shift if shift is not None else 0.))
+                sigma, peak, shift))
     def _find_tap(self, samples, t0, t1, z_start, z_end, v, accel, min_peak):
         # Fahrkurve (trapezförmig oder dreieckig: beschleunigen, ggf. konstant,
         # bremsen) für die Zeit -> Z-Zuordnung

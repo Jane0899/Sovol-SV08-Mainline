@@ -70,7 +70,7 @@ End-G-Code: `END_PRINT`. Braucht ein Filament einen eigenen Z-Abstand, im Filame
 |---|---|---|
 | `printer.cfg` | **deine** Datei: gerätespezifische Werte, eigene Anpassungen am Ende, darunter der `SAVE_CONFIG`-Block | wird nie überschrieben |
 | `sv08-macros.cfg`, `sv08-loadcell.cfg`, `sv08-menu.cfg` | Symlinks ins Repo | kommen mit jedem Update – dort nichts ändern, Overrides in `printer.cfg` |
-| `klipper/klippy/extras/sv08_loadcell.py` | Symlink aufs Modul | kommt mit jedem Update |
+| `klipper/klippy/extras/sv08_loadcell.py` | Symlink aufs Modul. Es lädt `service_restart.py` und `sv08_tap.py` aus seinem Repo-Ordner mit (dafür braucht es keine eigenen Symlinks) | kommt mit jedem Update |
 
 Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnamige Sektion oder Option dort überschreibt die aus den `sv08-*.cfg`.
 
@@ -86,6 +86,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 | `LOADCELL_HOME` | Z homen (macht `G28` automatisch) |
 | `LOADCELL_WAIT_RELEASE [TIMEOUT=5]` | warten, bis die Wägezelle wieder frei ist (statt starrem `G4`) |
 | `LOADCELL_ACCURACY`, `LOADCELL_RELEASE_TIME`, `PROBE_OVERTRAVEL`, `RETRACT_TIME` | Messwerkzeuge |
+| `SERVICE_RESTART` | Klipper-Dienst über Moonraker/systemd neu starten. Nötig nach einem Update des Moduls: `RESTART` und `FIRMWARE_RESTART` lesen nur die Config neu, geänderter Python-Code bleibt alt. Nicht während eines Drucks |
 
 ## Wichtig
 

@@ -14,8 +14,21 @@
 # Copyright (C) 2026  Jane0899
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, math, time
+import logging, math, os, importlib.util
 from . import probe as probe_mod
+
+def _load_sibling(name):
+    # Weitere Module aus dem Repo-Ordner dieser Datei laden (der Symlink in
+    # klippy/extras zeigt hierher). So braucht ein neues Modul weder einen
+    # eigenen Symlink noch einen Config-Abschnitt - der Updater macht nur
+    # git pull und kann keine Symlinks anlegen
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                        name + '.py')
+    spec = importlib.util.spec_from_file_location('sv08_loadcell_' + name,
+                                                  path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 def move_time(dist, speed, accel):
     # Dauer einer Fahrt aus dem Stand in den Stand (Trapez/Dreieck)
@@ -127,9 +140,6 @@ class SV08Loadcell:
                 ('AUTO_Z_OFFSET_SAVE_CORRECTION',
                  "Babystep seit dem letzten AUTO_Z_OFFSET als Korrektur"
                  " übernehmen (danach SAVE_CONFIG)"),
-                ('TAP_TEST',
-                 "Experiment: Düse aufs Bett tippen, Kontakt per Beschleunigungs-"
-                 "sensor erkennen und mit der induktiven Probe vergleichen"),
                 ('FILAMENT_Z_ADJUST',
                  "Z-Anpassung fürs Filament setzen (Z=mm, absolut; Z=0 hebt"
                  " sie auf). Zählt nicht als Babystep"),
@@ -146,6 +156,10 @@ class SV08Loadcell:
                  "Kalibrierungs-Assistent (Mainsail-Dialoge)")]:
             self.gcode.register_command(cmd, getattr(self, 'cmd_' + cmd),
                                         desc=desc)
+        # Eigene Dateien im selben Ordner: SERVICE_RESTART, TAP_TEST
+        self.service_restart = _load_sibling(
+            'service_restart').ServiceRestart(config)
+        self.tap = _load_sibling('sv08_tap').SV08Tap(self)
     def _handle_connect(self):
         self.toolhead = self.printer.lookup_object('toolhead')
         qe = self.printer.lookup_object('query_endstops')
@@ -611,185 +625,6 @@ class SV08Loadcell:
                 "AUTO_Z_OFFSET: Babystep %+.4f -> Korrektur %.4f -> %.4f. Mit"
                 " SAVE_CONFIG dauerhaft speichern." % (delta, old,
                                                       self.z_correction))
-    def cmd_TAP_TEST(self, gcmd):
-        # Experiment: Stimmt die induktive Probe an Stelle X,Y? Vorhersage der
-        # Kontakthöhe wie AUTO_Z_OFFSET (Probe über Bett und Zelle, genau
-        # gehomt), dann fährt die kalte Düse bis OVERTRAVEL unter die
-        # Vorhersage, der ADXL345 im Druckkopf erkennt den Aufprall. EIN
-        # Versuch: kein Aufprall heißt, die Vorhersage oder die Methode stimmt
-        # nicht - dann nicht tiefer fahren. CELL=1: auf das Wägezellen-Pad
-        # (Kontakthöhe bekannt = position_endstop), zur Prüfung der Methode
-        th = self.toolhead
-        cell = gcmd.get_int('CELL', 0, minval=0, maxval=1)
-        v = gcmd.get_float('TAP_SPEED', 30., above=0., maxval=50.)
-        above = gcmd.get_float('ABOVE', 1., above=.2, maxval=3.)
-        # Tiefer nur bei langsamer Fahrt (Lüfter-Methode): die Düse drückt
-        # dann sanft in die Platte statt aufzuschlagen
-        over = gcmd.get_float('OVERTRAVEL', .08, above=0.,
-                              maxval=.3 if v <= 1. else .15)
-        # Z-Beschleunigung nur für die Tippfahrt: kurze Bremsrampe, damit die
-        # Düse mit fast voller Geschwindigkeit aufsetzt (die Probe stoppt bei
-        # jeder Messung ähnlich hart, bis 50 mm/s ohne Schrittverlust)
-        # Bis 50000: die Probe stoppt bis 50 mm/s schlagartig ohne
-        # Schrittverlust (Messreihe Okt. 2026), ein Bremsweg von v²/2a ist
-        # dagegen sanft
-        tap_accel = gcmd.get_float('TAP_ACCEL', 10000., above=0.,
-                                   maxval=50000.)
-        min_peak = gcmd.get_float('MIN_PEAK', 5000., above=0.)
-        # Aufprall erst ab so weit über der Vorhersage suchen: davor liegt
-        # die Anfahrt mit ihrem Ruck
-        window = gcmd.get_float('WINDOW', .3, above=0.)
-        dump = gcmd.get_int('DUMP', 0, minval=0, maxval=1)
-        if self._nozzle_dirty():
-            # Nach einem Druck vor dem Antippen reinigen, dann kalt blasen
-            gcmd.respond_info("TAP_TEST: seit dem Druck nicht gereinigt -"
-                              " reinige und kühle ab")
-            if 'z' not in self._homed():
-                self.gcode.run_script_from_command("G28")
-            self._run_clean()
-            for c in ("M106 S255", "M106 P1 S255",
-                      "TEMPERATURE_WAIT SENSOR=extruder MAXIMUM=55",
-                      "M106 S0", "M106 P1 S0"):
-                self.gcode.run_script_from_command(c)
-        if self._nozzle_temp() > 60.:
-            raise gcmd.error("TAP_TEST nur mit kalter Düse (unter 60 °C)")
-        chip = self.printer.lookup_object('adxl345', None)
-        if chip is None:
-            raise gcmd.error("TAP_TEST: kein [adxl345]")
-        homed = self._homed()
-        if 'x' not in homed or 'y' not in homed:
-            self.gcode.run_script_from_command("G28")
-        # Z genau auf der Wägezelle (normales G28 homt nur grob). Nur wenn
-        # nötig: Die Düsenhöhe ändert sich nur bei Schrittverlust, und den
-        # prüft jeder Test danach mit der Probe
-        if (gcmd.get_int('HOME', 0, minval=0, maxval=1) or not self.z_precise
-                or 'z' not in self._homed()):
-            self.gcode.run_script_from_command(
-                "LOADCELL_HOME ROUGH=0 ON_BLOB=error BLOB_TOL=%.3f"
-                % (gcmd.get_float('BLOB_TOL', self.TAP_BLOB_TOL, above=0.),))
-        home_gap = self.last_result.get('probe_contact_gap')
-        endstop = self._settings()['stepper_z']['position_endstop']
-        if cell:
-            x, y = self.loadcell_xy
-            predicted = endstop
-            bed_z = self._probe_at(gcmd, x, y)
-        else:
-            x = gcmd.get_float('X'); y = gcmd.get_float('Y')
-            sensor_z = self._probe_at(gcmd, *self.loadcell_xy)
-            bed_z = self._probe_at(gcmd, x, y)
-            predicted = bed_z - sensor_z + endstop - self.z_correction
-        kin = th.get_kinematics()
-        accel = tap_accel
-        z_start = predicted + above
-        z_end = predicted - over
-        self._lift_to(z_start + 2.)
-        th.manual_move([x, y, None], self.travel_speed)
-        th.manual_move([None, None, z_start], self.lift_speed)
-        th.dwell(.3)
-        aclient = chip.start_internal_client()
-        th.dwell(.2)
-        th.wait_moves()
-        t0 = th.get_last_move_time()
-        # Nur für diese eine Fahrt: Z- und Kopf-Beschleunigung hoch (die
-        # Fahrt holt sich max_accel vom Kopf, gedeckelt durch max_z_accel)
-        old_accel = kin.max_z_accel, th.max_accel
-        kin.max_z_accel = th.max_accel = accel
-        try:
-            th.manual_move([None, None, z_end], v)
-            t1 = th.get_last_move_time()
-            th.wait_moves()
-        finally:
-            kin.max_z_accel, th.max_accel = old_accel
-        th.dwell(.2)
-        aclient.finish_measurements()
-        th.manual_move([None, None, z_start + 2.], self.lift_speed)
-        contact, diag = self._find_tap(
-            aclient.get_samples(), t0, t1, z_start, z_end, v, accel,
-            min_peak, predicted + window,
-            "/tmp/tap_test_%s.csv" % (time.strftime("%Y%m%d_%H%M%S"),)
-            if dump else None)
-        # Schrittverlust? Dieselbe Stelle noch einmal mit der Probe messen
-        shift = self._probe_at(gcmd, x, y) - bed_z
-        if abs(shift) > .02:
-            self.z_precise = False
-            raise gcmd.error("TAP_TEST: Z hat sich beim Tippen um %+.3f mm"
-                             " verschoben (Schrittverlust) - Messung ungültig"
-                             % (shift,))
-        if contact is None:
-            raise gcmd.error(
-                "TAP_TEST X%.1f Y%.1f: kein Aufprall bis %.3f mm unter der"
-                " Vorhersage %.3f - Vorhersage oder Methode stimmt nicht (%s)"
-                % (x, y, over, predicted, diag))
-        z_contact, sigma, peak = contact
-        self.last_result['tap'] = (x, y, predicted, z_contact)
-        gcmd.respond_info(
-            "TAP_TEST X%.1f Y%.1f: Vorhersage %.3f, Düse berührt bei %.3f ->"
-            " Abweichung %+.3f mm (Aufprall mit %.1f mm/s, Rauschen %.0f,"
-            " Ausschlag %.0f mm/s², Z-Kontrolle danach %+.3f mm, Abstand"
-            " Probe/Kontakt beim Homing %.3f mm)" % (
-                x, y, predicted, z_contact, z_contact - predicted,
-                min(v, math.sqrt(2. * accel * max(0., z_contact - z_end))),
-                sigma, peak, shift, home_gap or 0.)
-            + (" - " + diag if dump else ""))
-    def _find_tap(self, samples, t0, t1, z_start, z_end, v, accel, min_peak,
-                  z_window, dump_path):
-        # Fahrkurve (trapezförmig oder dreieckig: beschleunigen, ggf. konstant,
-        # bremsen) für die Zeit -> Z-Zuordnung
-        dist = z_start - z_end
-        if dist < v * v / accel:
-            v = math.sqrt(accel * dist)
-        ta = v / accel
-        da = .5 * accel * ta * ta
-        tc = (dist - 2. * da) / v
-        def z_at(t):
-            t = t - t0
-            if t <= 0:
-                return z_start
-            if t < ta:
-                return z_start - .5 * accel * t * t
-            if t < ta + tc:
-                return z_start - da - v * (t - ta)
-            t = min(t - ta - tc, ta)
-            return z_start - da - v * tc - (v * t - .5 * accel * t * t)
-        def med(vals):
-            vals = sorted(vals)
-            return vals[len(vals) // 2]
-        # Grundlinie: Ruhe direkt vor der Fahrt (nur Schwerkraft)
-        rest = [s for s in samples if t0 - .2 < s.time < t0]
-        if len(rest) < 20:
-            return None, "zu wenige Messwerte (%d)" % (len(samples),)
-        axes = ('accel_x', 'accel_y', 'accel_z')
-        base = [med([getattr(s, a) for s in rest]) for a in axes]
-        def dev(s):
-            return math.sqrt(sum((getattr(s, a) - b) ** 2
-                                 for a, b in zip(axes, base)))
-        sigma = med([dev(s) for s in rest]) * 1.5 + 1.
-        # Anfahrt und Bremsen liegen außerhalb des Suchfensters, dazwischen
-        # fährt die Düse gleichförmig: feste Schwelle über dem Rauschen
-        thresh = max(8. * sigma, min_peak)
-        if dump_path:
-            with open(dump_path, 'w') as f:
-                f.write("t,z,ax,ay,az,dev\n")
-                for s in samples:
-                    if t0 - .2 < s.time <= t1 + .2:
-                        f.write("%.5f,%.4f,%.0f,%.0f,%.0f,%.0f\n" % (
-                            s.time - t0, z_at(s.time), s.accel_x, s.accel_y,
-                            s.accel_z, dev(s)))
-        # Nur bis zum Beginn der Bremsrampe: das Bremsen selbst ruckt auch
-        t_brake = t0 + ta + tc
-        cand = [s for s in samples if t0 < s.time <= t_brake
-                and z_at(s.time) <= z_window]
-        if not cand:
-            return None, "keine Messwerte während der Fahrt"
-        top = max(cand, key=dev)
-        diag = "Rauschen %.0f, größter Ausschlag %.0f mm/s² bei Z %.3f%s" % (
-            sigma, dev(top), z_at(top.time),
-            ", Messwerte in " + dump_path if dump_path else "")
-        for i in range(len(cand) - 1):
-            if dev(cand[i]) > thresh and dev(cand[i + 1]) > thresh:
-                peak = max(dev(c) for c in cand[i:i + 20])
-                return (z_at(cand[i].time), sigma, peak), diag
-        return None, diag
     def cmd_FILAMENT_Z_ADJUST(self, gcmd):
         # Für den Filament-Start-G-Code im Slicer statt SET_GCODE_OFFSET
         # Z_ADJUST: absolut, wiederholbar, und AUTO_Z_OFFSET_SAVE_CORRECTION

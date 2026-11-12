@@ -218,6 +218,8 @@ class SV08Loadcell:
     # Abstand als Filament (sonst Drift): grob homen setzte Z sonst um die
     # Differenz zu tief (beobachtet: 0,03-0,07 mm, schlechte Haftung)
     FRESH_CLEAN_AGE = 120.
+    # Druckstart: so oft reinigen und neu messen, dann abbrechen
+    MAX_BLOB_CLEANS = 3
     FRESH_BLOB_TOL = .1
     def _wait_release(self, gcmd, max_wait, settle=0.):
         self.toolhead.wait_moves()
@@ -291,8 +293,7 @@ class SV08Loadcell:
         if on_blob not in ('rough', 'clean', 'error'):
             raise gcmd.error("LOADCELL_HOME: ON_BLOB=rough|clean|error")
         clean = self._clean_macro() if (
-            on_blob == 'clean' and self.auto_clean
-            and not self.cleaning) else None
+            on_blob == 'clean' and self.auto_clean) else None
         gap = gcmd.get_float('GAP', self.probe_contact_gap)
         # Grenze für die Filament-Erkennung. Größer, wo das Modell unsicher
         # ist (kalte Düse unterhalb der kalibrierten Temperaturen)
@@ -447,11 +448,25 @@ class SV08Loadcell:
         if on_blob == 'error':
             raise gcmd.error("LOADCELL_HOME: %s - hängt Filament an der"
                              " Düse? Düse reinigen und erneut messen" % (why,))
-        if on_blob == 'clean' and self._clean_allowed(clean):
+        if on_blob == 'clean' and not self.cleaning:
+            # Druckstart: nie grob weitermachen - ein Druck mit falschem
+            # Nullpunkt hält nicht. Reinigen und genau neu messen, nach
+            # MAX_BLOB_CLEANS Reinigungen abbrechen
+            cleans = gcmd.get_int('CLEANS', 0, minval=0)
+            if clean is None or cleans >= self.MAX_BLOB_CLEANS:
+                raise gcmd.error(
+                    "LOADCELL_HOME: %s - %s. Abbruch: ohne genauen"
+                    " Nullpunkt hält der Druck nicht" % (why, (
+                        "nach %d Reinigungen immer noch Filament an der Düse"
+                        % (cleans,)) if clean is not None else
+                        "Filament an der Düse, automatische Reinigung aus"))
             gcmd.respond_info("LOADCELL_HOME: %s - Filament an der Düse,"
-                              " reinige" % (why,))
+                              " reinige (%d/%d)" % (why, cleans + 1,
+                                                    self.MAX_BLOB_CLEANS))
             self._set_rough_z(rough_shift)
             self._run_clean()
+            self.gcode.run_script_from_command(
+                "LOADCELL_HOME ROUGH=0 ON_BLOB=clean CLEANS=%d" % (cleans + 1,))
             return
         self._set_rough_z(rough_shift)
         gcmd.respond_info("LOADCELL_HOME: %s - Filament an der Düse? Grob über"
@@ -465,9 +480,6 @@ class SV08Loadcell:
     def _expected_gap(self, temp):
         return self.contact_gap + self.contact_gap_coeff * (
             temp - self.contact_gap_temp)
-    def _clean_allowed(self, clean):
-        age = self._clean_age(clean) if clean is not None else None
-        return clean is not None and (age is None or age > 60.)
     def _fresh_clean(self):
         # Sekunden seit der letzten Reinigung, wenn das höchstens
         # FRESH_CLEAN_AGE her ist, sonst None

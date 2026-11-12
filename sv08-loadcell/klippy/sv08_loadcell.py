@@ -515,103 +515,129 @@ class SV08Loadcell:
         self.last_offset = origin_z - self.filament_adjust
         configfile = self.printer.lookup_object('configfile')
         configfile.set(self.name, 'z_correction', "%.4f" % (self.z_correction,))
-        gcmd.respond_info(
-            "AUTO_Z_OFFSET: Babystep %+.4f -> Korrektur %.4f -> %.4f. Mit"
-            " SAVE_CONFIG dauerhaft speichern." % (delta, old,
-                                                  self.z_correction))
+        stats = self.printer.lookup_object('print_stats').get_status(
+            self.reactor.monotonic())
+        if stats['state'] in ('printing', 'paused'):
+            gcmd.respond_info(
+                "AUTO_Z_OFFSET: Babystep %+.4f -> Korrektur %.4f -> %.4f."
+                " Wird nach dem Druck gespeichert." % (delta, old,
+                                                      self.z_correction))
+            self.gcode.run_script_from_command("SAVE_CONFIG_AFTER_PRINT")
+        else:
+            gcmd.respond_info(
+                "AUTO_Z_OFFSET: Babystep %+.4f -> Korrektur %.4f -> %.4f. Mit"
+                " SAVE_CONFIG dauerhaft speichern." % (delta, old,
+                                                      self.z_correction))
     def cmd_TAP_TEST(self, gcmd):
-        # Experiment: Stimmt die induktive Probe an Stelle X,Y? Die kalte Düse
-        # fährt von ABOVE über der Probe-Vorhersage bis OVERTRAVEL darunter,
-        # der ADXL345 im Druckkopf zeichnet auf, der Aufprall ergibt die
-        # tatsächliche Kontakthöhe. Kein Aufprall: nächster Versuch 0,1 mm
-        # tiefer, höchstens MAX_OVERTRAVEL unter der Vorhersage
+        # Experiment: Stimmt die induktive Probe an Stelle X,Y? Vorhersage der
+        # Kontakthöhe wie AUTO_Z_OFFSET (Probe über Bett und Zelle, genau
+        # gehomt), dann fährt die kalte Düse bis OVERTRAVEL unter die
+        # Vorhersage, der ADXL345 im Druckkopf erkennt den Aufprall. EIN
+        # Versuch: kein Aufprall heißt, die Vorhersage oder die Methode stimmt
+        # nicht - dann nicht tiefer fahren. CELL=1: auf das Wägezellen-Pad
+        # (Kontakthöhe bekannt = position_endstop), zur Prüfung der Methode
         th = self.toolhead
-        if 'xyz' not in ''.join(sorted(self._homed())):
-            raise gcmd.error("TAP_TEST: erst homen")
-        x = gcmd.get_float('X'); y = gcmd.get_float('Y')
-        v = gcmd.get_float('TAP_SPEED', 10., above=0., maxval=30.)
-        above = gcmd.get_float('ABOVE', .5, above=.1, maxval=2.)
-        over = gcmd.get_float('OVERTRAVEL', .1, above=0., maxval=.3)
-        max_over = gcmd.get_float('MAX_OVERTRAVEL', .5, above=0., maxval=.6)
-        # Mindestausschlag: der Bremsruck am Fahrtende hat max_z_accel
+        cell = gcmd.get_int('CELL', 0, minval=0, maxval=1)
+        v = gcmd.get_float('TAP_SPEED', 30., above=0., maxval=50.)
+        above = gcmd.get_float('ABOVE', 1., above=.2, maxval=3.)
+        over = gcmd.get_float('OVERTRAVEL', .08, above=0., maxval=.15)
         min_peak = gcmd.get_float('MIN_PEAK', 1500., above=0.)
         if self._nozzle_temp() > 60.:
             raise gcmd.error("TAP_TEST nur mit kalter Düse (unter 60 °C)")
         chip = self.printer.lookup_object('adxl345', None)
         if chip is None:
             raise gcmd.error("TAP_TEST: kein [adxl345]")
-        predicted = self._probe_at(gcmd, x, y)
+        homed = self._homed()
+        if 'x' not in homed or 'y' not in homed:
+            self.gcode.run_script_from_command("G28")
+        # Z genau auf der Wägezelle (normales G28 homt nur grob)
+        self.gcode.run_script_from_command(
+            "LOADCELL_HOME ROUGH=0 ON_BLOB=error")
+        endstop = self._settings()['stepper_z']['position_endstop']
+        if cell:
+            x, y = self.loadcell_xy
+            predicted = endstop
+        else:
+            x = gcmd.get_float('X'); y = gcmd.get_float('Y')
+            sensor_z = self._probe_at(gcmd, *self.loadcell_xy)
+            bed_z = self._probe_at(gcmd, x, y)
+            predicted = bed_z - sensor_z + endstop - self.z_correction
         accel = self._z_accel()
-        while True:
-            z_start = predicted + above
-            z_end = predicted - over
-            self._lift_to(z_start + 2.)
-            th.manual_move([x, y, None], self.travel_speed)
-            th.manual_move([None, None, z_start], self.lift_speed)
-            th.dwell(.3)
-            aclient = chip.start_internal_client()
-            th.dwell(.2)
-            th.wait_moves()
-            t0 = th.get_last_move_time()
-            th.manual_move([None, None, z_end], v)
-            t1 = th.get_last_move_time()
-            th.dwell(.2)
-            aclient.finish_measurements()
-            th.manual_move([None, None, z_start + 2.], self.lift_speed)
-            contact, diag = self._find_tap(aclient.get_samples(), t0, t1,
-                                           z_start, z_end, v, accel, min_peak)
-            if contact is not None:
-                break
-            gcmd.respond_info("TAP_TEST X%.1f Y%.1f: kein Aufprall bis %.3f"
-                              " unter der Vorhersage (%s)" % (x, y, over, diag))
-            over = round(over + .1, 3)
-            if over > max_over + 1e-6:
-                raise gcmd.error("TAP_TEST: kein Aufprall bis %.2f mm unter"
-                                 " der Vorhersage" % (max_over,))
+        z_start = predicted + above
+        z_end = predicted - over
+        self._lift_to(z_start + 2.)
+        th.manual_move([x, y, None], self.travel_speed)
+        th.manual_move([None, None, z_start], self.lift_speed)
+        th.dwell(.3)
+        aclient = chip.start_internal_client()
+        th.dwell(.2)
+        th.wait_moves()
+        t0 = th.get_last_move_time()
+        th.manual_move([None, None, z_end], v)
+        t1 = th.get_last_move_time()
+        th.dwell(.2)
+        aclient.finish_measurements()
+        th.manual_move([None, None, z_start + 2.], self.lift_speed)
+        contact, diag = self._find_tap(aclient.get_samples(), t0, t1, z_start,
+                                       z_end, v, accel, min_peak)
+        if contact is None:
+            raise gcmd.error(
+                "TAP_TEST X%.1f Y%.1f: kein Aufprall bis %.3f mm unter der"
+                " Vorhersage %.3f - Vorhersage oder Methode stimmt nicht (%s)"
+                % (x, y, over, predicted, diag))
         z_contact, sigma, peak = contact
         self.last_result['tap'] = (x, y, predicted, z_contact)
         gcmd.respond_info(
-            "TAP_TEST X%.1f Y%.1f: Probe sagt %.3f, Düse berührt bei %.3f ->"
-            " Probe liegt %+.3f mm daneben (Rauschen %.0f mm/s², Ausschlag"
-            " %.0f mm/s²)" % (x, y, predicted, z_contact, predicted - z_contact,
-                              sigma, peak))
+            "TAP_TEST X%.1f Y%.1f: Vorhersage %.3f, Düse berührt bei %.3f ->"
+            " Abweichung %+.3f mm (Aufprall mit %.1f mm/s, Rauschen %.0f,"
+            " Ausschlag %.0f mm/s²)" % (
+                x, y, predicted, z_contact, z_contact - predicted,
+                min(v, math.sqrt(2. * accel * max(0., z_contact - z_end))),
+                sigma, peak))
     def _find_tap(self, samples, t0, t1, z_start, z_end, v, accel, min_peak):
-        # Fahrkurve: beschleunigen mit accel bis v, dann konstant
+        # Fahrkurve (trapezförmig oder dreieckig: beschleunigen, ggf. konstant,
+        # bremsen) für die Zeit -> Z-Zuordnung
         dist = z_start - z_end
+        if dist < v * v / accel:
+            v = math.sqrt(accel * dist)
         ta = v / accel
         da = .5 * accel * ta * ta
+        tc = (dist - 2. * da) / v
         def z_at(t):
             t = t - t0
             if t <= 0:
                 return z_start
             if t < ta:
                 return z_start - .5 * accel * t * t
-            return max(z_end, z_start - da - v * (t - ta))
-        # Grundlinie aus der Fahrt vor dem frühesten möglichen Kontakt
-        # (erste Hälfte des Wegs bei konstanter Geschwindigkeit)
-        t_quiet = t0 + ta + (dist * .5 - da) / v
-        quiet = [s for s in samples if t0 + ta < s.time < t_quiet]
-        if len(quiet) < 20:
-            return None, "zu wenige Messwerte (%d)" % (len(samples),)
+            if t < ta + tc:
+                return z_start - da - v * (t - ta)
+            t = min(t - ta - tc, ta)
+            return z_start - da - v * tc - (v * t - .5 * accel * t * t)
         def med(vals):
             vals = sorted(vals)
             return vals[len(vals) // 2]
-        base = [med([getattr(s, a) for s in quiet])
-                for a in ('accel_x', 'accel_y', 'accel_z')]
+        # Grundlinie: Ruhe direkt vor der Fahrt (nur Schwerkraft)
+        rest = [s for s in samples if t0 - .2 < s.time < t0]
+        if len(rest) < 20:
+            return None, "zu wenige Messwerte (%d)" % (len(samples),)
+        axes = ('accel_x', 'accel_y', 'accel_z')
+        base = [med([getattr(s, a) for s in rest]) for a in axes]
         def dev(s):
-            return math.sqrt(sum((getattr(s, a) - b) ** 2 for a, b in zip(
-                ('accel_x', 'accel_y', 'accel_z'), base)))
-        noise = [dev(s) for s in quiet]
-        sigma = med(noise) * 1.5 + 1.
-        thresh = max(8. * sigma, min_peak)
-        cand = [s for s in samples if t_quiet <= s.time <= t1 + .05]
+            return math.sqrt(sum((getattr(s, a) - b) ** 2
+                                 for a, b in zip(axes, base)))
+        sigma = med([dev(s) for s in rest]) * 1.5 + 1.
+        # Bewegung selbst bringt bis zu accel (Beschleunigen/Bremsen)
+        thresh = max(8. * sigma, accel + min_peak)
+        cand = [s for s in samples if t0 < s.time <= t1 + .05]
+        if not cand:
+            return None, "keine Messwerte während der Fahrt"
+        top = max(cand, key=dev)
         diag = "Rauschen %.0f, größter Ausschlag %.0f mm/s² bei Z %.3f" % (
-            sigma, max(dev(c) for c in cand) if cand else 0.,
-            z_at(max(cand, key=dev).time) if cand else 0.)
+            sigma, dev(top), z_at(top.time))
         for i in range(len(cand) - 1):
             if dev(cand[i]) > thresh and dev(cand[i + 1]) > thresh:
                 if cand[i].time > t1:
-                    # erst nach Fahrtende: Bremsruck, kein Aufprall
+                    # erst nach Fahrtende: kein Aufprall
                     return None, diag
                 peak = max(dev(c) for c in cand[i:i + 20])
                 return (z_at(cand[i].time), sigma, peak), diag

@@ -295,6 +295,8 @@ class SV08Loadcell:
             # Z gilt als unbekannt: Kopf "ganz oben" annehmen, damit die
             # Probe den gesamten Weg nach unten fahren darf
             pos = th.get_position()
+            # Alter Nullpunkt, falls Z schon gehomt war (für home_shift)
+            old_z = pos[2] if 'z' in homed else None
             pos[2] = z_max
             th.set_position(pos, homing_axes="z")
             # 1. Grob: induktive Probe über der Wägezelle, schnell
@@ -359,6 +361,13 @@ class SV08Loadcell:
                               " mindestens %.3f mm" % (z_probe - z_cell,
                                                        min_gap))
                 return
+            # Verschiebung gegenüber dem alten Nullpunkt (Schrittverlust?):
+            # der Kontaktpunkt im alten Koordinatensystem minus position_endstop
+            if old_z is not None:
+                self.last_result['home_shift'] = (
+                    z_cell - z_max + old_z - pos_endstop)
+            else:
+                self.last_result.pop('home_shift', None)
             # 4. Z so setzen, dass der Auslösepunkt = position_endstop ist
             pos = th.get_position()
             pos[2] += pos_endstop - z_cell
@@ -541,6 +550,10 @@ class SV08Loadcell:
         v = gcmd.get_float('TAP_SPEED', 30., above=0., maxval=50.)
         above = gcmd.get_float('ABOVE', 1., above=.2, maxval=3.)
         over = gcmd.get_float('OVERTRAVEL', .08, above=0., maxval=.15)
+        # Z-Beschleunigung nur für die Tippfahrt: kurze Bremsrampe, damit die
+        # Düse mit fast voller Geschwindigkeit aufsetzt (die Probe stoppt bei
+        # jeder Messung ähnlich hart, bis 50 mm/s ohne Schrittverlust)
+        tap_accel = gcmd.get_float('TAP_ACCEL', 3000., above=0., maxval=6000.)
         min_peak = gcmd.get_float('MIN_PEAK', 1500., above=0.)
         if self._nozzle_temp() > 60.:
             raise gcmd.error("TAP_TEST nur mit kalter Düse (unter 60 °C)")
@@ -562,7 +575,9 @@ class SV08Loadcell:
             sensor_z = self._probe_at(gcmd, *self.loadcell_xy)
             bed_z = self._probe_at(gcmd, x, y)
             predicted = bed_z - sensor_z + endstop - self.z_correction
-        accel = self._z_accel()
+        kin = th.get_kinematics()
+        accel = min(tap_accel, th.get_status(
+            self.reactor.monotonic())['max_accel'])
         z_start = predicted + above
         z_end = predicted - over
         self._lift_to(z_start + 2.)
@@ -573,13 +588,27 @@ class SV08Loadcell:
         th.dwell(.2)
         th.wait_moves()
         t0 = th.get_last_move_time()
-        th.manual_move([None, None, z_end], v)
-        t1 = th.get_last_move_time()
+        old_accel = kin.max_z_accel
+        kin.max_z_accel = accel
+        try:
+            th.manual_move([None, None, z_end], v)
+            t1 = th.get_last_move_time()
+            th.wait_moves()
+        finally:
+            kin.max_z_accel = old_accel
         th.dwell(.2)
         aclient.finish_measurements()
         th.manual_move([None, None, z_start + 2.], self.lift_speed)
         contact, diag = self._find_tap(aclient.get_samples(), t0, t1, z_start,
                                        z_end, v, accel, min_peak)
+        # Schrittverlust? Genau neu homen und Verschiebung von Z prüfen
+        self.gcode.run_script_from_command(
+            "LOADCELL_HOME ROUGH=0 ON_BLOB=error")
+        shift = self.last_result.get('home_shift')
+        if shift is not None and abs(shift) > .02:
+            raise gcmd.error("TAP_TEST: Z hat sich beim Tippen um %+.3f mm"
+                             " verschoben (Schrittverlust) - Messung ungültig"
+                             % (shift,))
         if contact is None:
             raise gcmd.error(
                 "TAP_TEST X%.1f Y%.1f: kein Aufprall bis %.3f mm unter der"
@@ -590,10 +619,10 @@ class SV08Loadcell:
         gcmd.respond_info(
             "TAP_TEST X%.1f Y%.1f: Vorhersage %.3f, Düse berührt bei %.3f ->"
             " Abweichung %+.3f mm (Aufprall mit %.1f mm/s, Rauschen %.0f,"
-            " Ausschlag %.0f mm/s²)" % (
+            " Ausschlag %.0f mm/s², Z-Kontrolle danach %+.3f mm)" % (
                 x, y, predicted, z_contact, z_contact - predicted,
                 min(v, math.sqrt(2. * accel * max(0., z_contact - z_end))),
-                sigma, peak))
+                sigma, peak, shift if shift is not None else 0.))
     def _find_tap(self, samples, t0, t1, z_start, z_end, v, accel, min_peak):
         # Fahrkurve (trapezförmig oder dreieckig: beschleunigen, ggf. konstant,
         # bremsen) für die Zeit -> Z-Zuordnung

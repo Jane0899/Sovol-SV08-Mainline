@@ -94,7 +94,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 
 1. Im Mainsail-Update-Tab `sv08-loadcell` aktualisieren. Moonraker holt den neuen Stand und startet Klipper neu, das reicht für Makros und Module.
 2. Steht danach im Terminal rot **„Config-Upgrade nötig … UPGRADE_CONFIG eingeben“**, im Terminal `UPGRADE_CONFIG` eingeben. Das passt `printer.cfg`/`moonraker.conf`/Systemdateien an (wie ein erneuter Installer-Lauf, ohne Rückfragen, `printer.cfg` bleibt sonst unverändert), zeigt den Ablauf im Terminal und startet Klipper (und falls nötig Moonraker) neu. Protokoll: `logs/sv08-upgrade.log`.
-3. Braucht `sudo` auf deinem Drucker ein Passwort, überspringt `UPGRADE_CONFIG` die Schritte mit `sudo` und meldet das. Dann einmal per SSH `~/Sovol-SV08-Mainline/sv08-loadcell/install.sh --upgrade` aufrufen.
+3. Der Installer richtet `sudo` ohne Passwort ein (`/etc/sudoers.d/90-sv08-<benutzer>-nopasswd`), weil `UPGRADE_CONFIG` ohne Terminal läuft und niemand ein Passwort eingeben kann. Wer vor dieser Änderung installiert hat und dessen `sudo` ein Passwort will: `UPGRADE_CONFIG` meldet das, dann einmal per SSH `~/Sovol-SV08-Mainline/sv08-loadcell/install.sh --upgrade` aufrufen (fragt einmal nach dem Passwort). Danach geht alles über das Terminal.
 
 ## Wichtig
 

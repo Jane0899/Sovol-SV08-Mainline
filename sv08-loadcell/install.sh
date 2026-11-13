@@ -92,6 +92,46 @@ if [ -f "$CFG_DIR/printer.cfg" ] && grep -q '^\[include sv08-loadcell.cfg\]' "$C
 fi
 [ $UPGRADE = 0 ] || [ $UPDATE_MODE = 1 ] || die "--upgrade geht nur auf einem schon umgestellten Drucker - install.sh ohne --upgrade starten."
 
+# sudo ohne Passwort: UPGRADE_CONFIG läuft ohne Terminal und braucht sudo für
+# Systemdateien. Auf einem Drucker egal, viele Images (auch Sovols) machen
+# das ohnehin. Eigene Datei, damit es auf allen Druckern gleich ist
+SUDOERS="/etc/sudoers.d/90-sv08-$(id -un)-nopasswd"
+sudo_rule="$(id -un) ALL=(ALL) NOPASSWD: ALL"
+if [ "$(sudo -n cat "$SUDOERS" 2>/dev/null)" != "$sudo_rule" ] && can_sudo "sudo ohne Passwort einrichten"; then
+    say "Richte sudo ohne Passwort ein (für UPGRADE_CONFIG)"
+    tmp="$(mktemp)"
+    echo "$sudo_rule" > "$tmp"
+    if sudo visudo -c -q -f "$tmp"; then
+        sudo install -m 0440 -o root -g root "$tmp" "$SUDOERS"
+        echo "   $SUDOERS"
+    else
+        warn "sudoers-Regel ungültig - nicht eingerichtet"
+    fi
+    rm -f "$tmp"
+fi
+# Sovols Werks-Image hat dieselbe Regel für die Gruppe über 200-mal am Ende
+# von /etc/sudoers. Entfernen, sobald die eigene Datei greift
+factory_rule="%$(id -gn) ALL=(ALL) NOPASSWD: ALL"
+if [ "$(sudo -n cat "$SUDOERS" 2>/dev/null)" = "$sudo_rule" ] &&
+        sudo -n grep -qxF "$factory_rule" /etc/sudoers 2>/dev/null; then
+    say "Entferne Sovols sudo-Werkszeilen aus /etc/sudoers (ersetzt durch $SUDOERS)"
+    tmp="$(mktemp)"; orig="$(mktemp)"
+    sudo cat /etc/sudoers > "$orig"
+    grep -vxF "$factory_rule" "$orig" > "$tmp"
+    if sudo visudo -c -q -f "$tmp"; then
+        sudo install -m 0440 -o root -g root "$tmp" /etc/sudoers
+        # Gegenprobe ohne zwischengespeichertes Passwort; sonst zurück
+        sudo -k
+        if ! sudo -n true 2>/dev/null; then
+            warn "sudo ohne Passwort geht danach nicht - /etc/sudoers zurückgesetzt (Passwort nötig)"
+            sudo install -m 0440 -o root -g root "$orig" /etc/sudoers
+        fi
+    else
+        warn "bereinigte /etc/sudoers ungültig - unverändert gelassen"
+    fi
+    rm -f "$tmp" "$orig"
+fi
+
 # MCU-Seriennummern (nur Neuinstallation)
 MCU=""; EXTRA=""
 if [ $UPDATE_MODE = 0 ]; then

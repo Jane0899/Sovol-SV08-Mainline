@@ -15,8 +15,12 @@
 # Erneuter Aufruf auf einem schon umgestellten Drucker: printer.cfg bleibt,
 # es werden nur Symlinks, timelapse und Updater-Eintrag geprüft.
 #
-# Optionen: -y  keine Rückfragen (Seriennummern müssen dann eindeutig sein)
-# Umgebung: SV08_NO_RESTART=1  Dienste nicht neu starten (Tests)
+# Optionen: -y         keine Rückfragen (Seriennummern müssen dann eindeutig sein)
+#           --upgrade  nur Config-Upgrade eines schon umgestellten Druckers, ohne
+#                      Rückfragen. So ruft es UPGRADE_CONFIG im Klipper-Terminal auf.
+#                      Schritte mit sudo werden übersprungen, wenn sudo ein
+#                      Passwort will (dann einmal per SSH aufrufen)
+# Umgebung: SV08_NO_RESTART=1  Dienste nicht neu starten (Tests, UPGRADE_CONFIG)
 
 set -euo pipefail
 
@@ -29,11 +33,28 @@ TOOL="python3 $LC_DIR/scripts/cfgtool.py"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$HOME/printer_data/backup/sv08-loadcell-$STAMP"
 ASSUME_YES=0
-[ "${1:-}" = "-y" ] && ASSUME_YES=1
+UPGRADE=0
+for arg in "$@"; do
+    case "$arg" in
+        -y) ASSUME_YES=1 ;;
+        --upgrade) UPGRADE=1; ASSUME_YES=1 ;;
+        *) printf 'Unbekannte Option: %s\n' "$arg" >&2; exit 1 ;;
+    esac
+done
 
 say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mFEHLER:\033[0m %s\n' "$*" >&2; exit 1; }
+SUDO_SKIPPED=0
+can_sudo() {
+    # can_sudo "Was" -> 0, wenn sudo geht. Beim Upgrade (ohne Terminal) kann
+    # niemand ein Passwort eingeben: Schritt dann überspringen
+    [ $UPGRADE = 0 ] && return 0
+    sudo -n true 2>/dev/null && return 0
+    warn "übersprungen (sudo braucht ein Passwort): $1"
+    SUDO_SKIPPED=1
+    return 1
+}
 ask()  {
     # ask "Frage" -> 0 bei ja
     [ $ASSUME_YES = 1 ] && return 0
@@ -69,6 +90,7 @@ if [ -f "$CFG_DIR/printer.cfg" ] && grep -q '^\[include sv08-loadcell.cfg\]' "$C
     UPDATE_MODE=1
     say "Drucker ist schon umgestellt - printer.cfg bleibt unverändert."
 fi
+[ $UPGRADE = 0 ] || [ $UPDATE_MODE = 1 ] || die "--upgrade geht nur auf einem schon umgestellten Drucker - install.sh ohne --upgrade starten."
 
 # MCU-Seriennummern (nur Neuinstallation)
 MCU=""; EXTRA=""
@@ -133,7 +155,7 @@ tmp="$(mktemp)"
 sed -e "s#__UID__#$(id -u)#; s#__GID__#$(id -g)#; s#__HOME__#$HOME#g" \
     "$LC_DIR/system/makerbase-automount" > "$tmp"
 # auch ältere/abweichende Fassungen ersetzen, damit alle Drucker dasselbe Skript haben
-if [ -f "$AUTOMOUNT" ] && ! cmp -s "$tmp" "$AUTOMOUNT"; then
+if [ -f "$AUTOMOUNT" ] && ! cmp -s "$tmp" "$AUTOMOUNT" && can_sudo "USB-Automount härten"; then
     say "Härte Sovols USB-Automount (test.sh, WLAN, .deb-Installation entfernt)"
     mkdir -p "$BACKUP_DIR/usr/bin"
     cp "$AUTOMOUNT" "$BACKUP_DIR/usr/bin/makerbase-automount"
@@ -141,7 +163,7 @@ if [ -f "$AUTOMOUNT" ] && ! cmp -s "$tmp" "$AUTOMOUNT"; then
     echo "   alte Fassung gesichert: $BACKUP_DIR/usr/bin/makerbase-automount"
 fi
 rm -f "$tmp"
-if [ -f "$AUTOMOUNT" ] && [ ! -f /etc/default/sv08-usbmount ]; then
+if [ -f "$AUTOMOUNT" ] && [ ! -f /etc/default/sv08-usbmount ] && can_sudo "USB-Modus festlegen"; then
     usb_mode=move
     if [ $ASSUME_YES = 0 ]; then
         echo "Was soll mit G-Code-Dateien auf einem eingesteckten USB-Stick passieren?"
@@ -157,11 +179,15 @@ if [ -f "$AUTOMOUNT" ] && [ ! -f /etc/default/sv08-usbmount ]; then
 fi
 
 # ---------------------------------------------------------------- 3. Einspielen
-say "Klipper-Modul einbinden"
-ln -sfn "$LC_DIR/klippy/sv08_loadcell.py" "$EXTRAS_DIR/sv08_loadcell.py"
-# Klipper-Repo sauber halten (Moonraker meldet es sonst als "dirty")
+say "Klipper-Module einbinden"
+# Alle Module (sv08_loadcell legt fehlende nach einem Update auch selbst an)
 excl="$KLIPPER_DIR/.git/info/exclude"
-grep -qx 'klippy/extras/sv08_loadcell.py' "$excl" 2>/dev/null || echo 'klippy/extras/sv08_loadcell.py' >> "$excl"
+for f in "$LC_DIR"/klippy/*.py; do
+    b="$(basename "$f")"
+    ln -sfn "$f" "$EXTRAS_DIR/$b"
+    # Klipper-Repo sauber halten (Moonraker meldet es sonst als "dirty")
+    grep -qx "klippy/extras/$b" "$excl" 2>/dev/null || echo "klippy/extras/$b" >> "$excl"
+done
 
 say "Config-Dateien einbinden"
 for f in sv08-macros.cfg sv08-loadcell.cfg sv08-menu.cfg; do
@@ -191,7 +217,7 @@ $TOOL moonraker-timelapse "$CFG_DIR/moonraker.conf" | sed 's/^/   /'
 say "Numpy für Input Shaper prüfen"
 if "$HOME/klippy-env/bin/python" -c "import numpy" 2>/dev/null; then
     echo "   vorhanden"
-else
+elif can_sudo "numpy installieren"; then
     sudo apt-get install -y python3-numpy python3-matplotlib libatlas-base-dev libopenblas-dev
     "$HOME/klippy-env/bin/pip" install numpy
 fi
@@ -202,10 +228,20 @@ branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
 origin_repo="$(git -C "$REPO_DIR" remote get-url origin)"
 $TOOL moonraker-add "$CFG_DIR/moonraker.conf" "${REPO_DIR/#$HOME/~}" "$origin_repo" "$branch" | sed 's/^/   /'
 
+# Stand der Config merken: Klipper fordert UPGRADE_CONFIG an, solange er
+# unter sv08-loadcell/config-version liegt. Nicht, wenn sudo-Schritte fehlen
+if [ $SUDO_SKIPPED = 0 ]; then
+    cp "$LC_DIR/config-version" "$HOME/printer_data/.sv08-loadcell-version"
+    echo "   Config-Stand: $(cat "$LC_DIR/config-version")"
+else
+    warn "Nicht alles erledigt - einmal per SSH aufrufen: $LC_DIR/install.sh --upgrade"
+fi
+
 # ---------------------------------------------------------------- 5. Neustart
 if [ "${SV08_NO_RESTART:-0}" = 1 ]; then
-    warn "SV08_NO_RESTART=1 - Dienste nicht neu gestartet"
-else
+    # UPGRADE_CONFIG startet danach selbst über Moonraker neu
+    [ $UPGRADE = 1 ] || warn "SV08_NO_RESTART=1 - Dienste nicht neu gestartet"
+elif can_sudo "Moonraker und Klipper neu starten"; then
     say "Starte Moonraker und Klipper neu"
     sudo systemctl restart moonraker
     sudo systemctl restart klipper

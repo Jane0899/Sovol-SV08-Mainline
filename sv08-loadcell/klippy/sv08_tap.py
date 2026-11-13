@@ -1,8 +1,9 @@
 # TAP_TEST (experimentell): Plausibilitätsprüfung der induktiven Probe mit
 # der Düse und dem Beschleunigungssensor im Druckkopf
 #
-# Wird von sv08_loadcell.py aus diesem Ordner geladen (kein eigener
-# Config-Abschnitt, kein eigener Symlink: ein Update per git pull reicht).
+# Abschnitt [sv08_tap] in sv08-loadcell.cfg. Den Symlink nach klippy/extras
+# legt sv08_loadcell.py an (auch nach einem Update). Braucht [sv08_loadcell]
+# für Probe, Homing und Reinigung.
 #
 # Copyright (C) 2026  Jane0899
 #
@@ -10,11 +11,9 @@
 import math, time
 
 class SV08Tap:
-    def __init__(self, lc):
-        # lc: das SV08Loadcell-Objekt (Probe, Homing, Reinigung)
-        self.lc = lc
-        self.printer = lc.printer
-        self.gcode = lc.gcode
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self.gcode = self.printer.lookup_object('gcode')
         self.gcode.register_command(
             'TAP_TEST', self.cmd_TAP_TEST,
             desc="Experiment: Düsenkontakt an X,Y mit dem Beschleunigungs"
@@ -28,7 +27,9 @@ class SV08Tap:
         # nicht - dann nicht tiefer fahren. CELL=1: auf das Wägezellen-Pad
         # (Kontakthöhe bekannt = position_endstop), zur Prüfung der Methode.
         # Auf dem nachgiebigen Bett nur relativ zwischen Stellen auswerten
-        lc = self.lc
+        # Erst hier nachschlagen: [sv08_loadcell] lädt dieses Modul selbst,
+        # beim Laden gibt es das Objekt noch nicht
+        lc = self.printer.lookup_object('sv08_loadcell')
         th = lc.toolhead
         cell = gcmd.get_int('CELL', 0, minval=0, maxval=1)
         v = gcmd.get_float('TAP_SPEED', 30., above=0., maxval=50.)
@@ -198,3 +199,6 @@ class SV08Tap:
                 peak = max(dev(c) for c in cand[i:i + 20])
                 return (z_at(cand[i].time), sigma, peak), diag
         return None, diag
+
+def load_config(config):
+    return SV08Tap(config)

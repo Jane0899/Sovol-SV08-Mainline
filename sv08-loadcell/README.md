@@ -8,7 +8,7 @@ Erweiterung zu dieser Anleitung für SV08 mit **Original-Hardware**: induktive P
 - **Automatischer Z-Offset vor jedem Druck (`AUTO_Z_OFFSET`)**: Die Düse auf der Wägezelle ist die Z-Referenz. Die induktive Probe misst über der Zelle und am Bett direkt davor. Daraus ergibt sich der Offset. Gemessen wird bei Drucktemperatur, weil sich die Düse ausdehnt.
 - **Kalibrierungs-Assistent (`CALIBRATE_SV08`)**: Dialoge in Mainsail führen durch Sensor-Check, automatische Messreihen, Z-Nullpunkt, Papiertest (bei einer Nachkalibrierung überspringbar) und Input Shaper. Die Ergebnisse landen per `SAVE_CONFIG` in der `printer.cfg`.
 - **Erprobte Config** vom Referenzgerät, dazu Makros: Motoren bleiben nach dem Druck an und gehen nach 10 min Leerlauf aus. Homing und QGL laufen nur, wenn nötig. Außerdem `M600`, Abluftlüfter (`M106 P3`) und getrennte Bauteillüfter.
-- **Updates über Mainsail** (Moonraker Update-Manager). Der Updater folgt `main`, dort liegt nur der freigegebene Stand. Entwickelt wird im Branch `loadcell-homing`.
+- **Updates über Mainsail** (Update-Tab, Moonraker Update-Manager). Braucht ein Update mehr als neue Dateien, fordert Klipper beim Start dazu auf, im Terminal `UPGRADE_CONFIG` einzugeben (siehe [Updates](#updates)). Der Updater folgt `main`, dort liegt nur der freigegebene Stand. Entwickelt wird im Branch `loadcell-homing`.
 
 ### Warum nicht Sovols `Z_OFFSET_CALIBRATION`?
 
@@ -70,7 +70,7 @@ End-G-Code: `END_PRINT`. Braucht ein Filament einen eigenen Z-Abstand, im Filame
 |---|---|---|
 | `printer.cfg` | **deine** Datei: gerätespezifische Werte, eigene Anpassungen am Ende, darunter der `SAVE_CONFIG`-Block | wird nie überschrieben |
 | `sv08-macros.cfg`, `sv08-loadcell.cfg`, `sv08-menu.cfg` | Symlinks ins Repo | kommen mit jedem Update – dort nichts ändern, Overrides in `printer.cfg` |
-| `klipper/klippy/extras/sv08_loadcell.py` | Symlink aufs Modul. Es lädt `service_restart.py` und `sv08_tap.py` aus seinem Repo-Ordner mit (dafür braucht es keine eigenen Symlinks) | kommt mit jedem Update |
+| `klipper/klippy/extras/sv08_loadcell.py`, `service_restart.py`, `sv08_tap.py`, `sv08_upgrade.py` | Symlinks auf die Module, Abschnitte in `sv08-loadcell.cfg`. Kommt mit einem Update ein neues Modul dazu, legt `sv08_loadcell.py` dessen Symlink beim Start selbst an | kommen mit jedem Update |
 
 Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnamige Sektion oder Option dort überschreibt die aus den `sv08-*.cfg`.
 
@@ -86,7 +86,15 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 | `LOADCELL_HOME` | Z homen (macht `G28` automatisch) |
 | `LOADCELL_WAIT_RELEASE [TIMEOUT=5]` | warten, bis die Wägezelle wieder frei ist (statt starrem `G4`) |
 | `LOADCELL_ACCURACY`, `LOADCELL_RELEASE_TIME`, `PROBE_OVERTRAVEL`, `RETRACT_TIME` | Messwerkzeuge |
-| `SERVICE_RESTART` | Klipper-Dienst über Moonraker/systemd neu starten. Nötig nach einem Update des Moduls: `RESTART` und `FIRMWARE_RESTART` lesen nur die Config neu, geänderter Python-Code bleibt alt. Nicht während eines Drucks |
+| `SERVICE_RESTART` | Klipper-Dienst über Moonraker/systemd neu starten. Nötig, wenn ein Modul von Hand geändert wurde: `RESTART` und `FIRMWARE_RESTART` lesen nur die Config neu, geänderter Python-Code bleibt alt (ein Update im Update-Tab startet den Dienst selbst neu). Nicht während eines Drucks |
+| `UPGRADE_CONFIG` | Config nach einem Update anpassen, wenn Klipper beim Start dazu auffordert. Führt `install.sh --upgrade` aus und startet danach neu. Nicht während eines Drucks |
+| `TAP_TEST X= Y=` | experimentell: Düsenkontakt mit dem Beschleunigungssensor gegen die induktive Probe prüfen (nur relativ zwischen Stellen auswerten) |
+
+## Updates
+
+1. Im Mainsail-Update-Tab `sv08-loadcell` aktualisieren. Moonraker holt den neuen Stand und startet Klipper neu, das reicht für Makros und Module.
+2. Steht danach im Terminal rot **„Config-Upgrade nötig … UPGRADE_CONFIG eingeben“**, im Terminal `UPGRADE_CONFIG` eingeben. Das passt `printer.cfg`/`moonraker.conf`/Systemdateien an (wie ein erneuter Installer-Lauf, ohne Rückfragen, `printer.cfg` bleibt sonst unverändert), zeigt den Ablauf im Terminal und startet Klipper (und falls nötig Moonraker) neu. Protokoll: `logs/sv08-upgrade.log`.
+3. Braucht `sudo` auf deinem Drucker ein Passwort, überspringt `UPGRADE_CONFIG` die Schritte mit `sudo` und meldet das. Dann einmal per SSH `~/Sovol-SV08-Mainline/sv08-loadcell/install.sh --upgrade` aufrufen.
 
 ## Wichtig
 

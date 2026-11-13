@@ -14,21 +14,47 @@
 # Copyright (C) 2026  Jane0899
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, math, os, importlib.util
+import logging, math, os
 from . import probe as probe_mod
 
-def _load_sibling(name):
-    # Weitere Module aus dem Repo-Ordner dieser Datei laden (der Symlink in
-    # klippy/extras zeigt hierher). So braucht ein neues Modul weder einen
-    # eigenen Symlink noch einen Config-Abschnitt - der Updater macht nur
-    # git pull und kann keine Symlinks anlegen
-    path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                        name + '.py')
-    spec = importlib.util.spec_from_file_location('sv08_loadcell_' + name,
-                                                  path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def link_sibling_modules():
+    # Die anderen Module im Repo-Ordner dieser Datei (service_restart,
+    # sv08_tap, sv08_upgrade, ...) nach klippy/extras verlinken. Der Updater
+    # in Mainsail macht nur git pull und startet Klipper neu, er legt keine
+    # Symlinks an. Ohne das würde ein Update mit einem neuen Modul Klipper
+    # lahmlegen ("not a valid config section"). Gibt die Modulnamen zurück
+    extras = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(os.path.realpath(__file__))
+    names = sorted(f[:-3] for f in os.listdir(repo)
+                   if f.endswith('.py') and f != 'sv08_loadcell.py')
+    for name in names:
+        link = os.path.join(extras, name + '.py')
+        target = os.path.join(repo, name + '.py')
+        if os.path.realpath(link) == target:
+            continue
+        try:
+            tmp = link + '.sv08tmp'
+            if os.path.lexists(tmp):
+                os.remove(tmp)
+            os.symlink(target, tmp)
+            os.replace(tmp, link)
+            logging.info("sv08_loadcell: Modul %s verlinkt", name)
+        except OSError:
+            logging.exception("sv08_loadcell: %s nicht verlinkbar", name)
+            continue
+        # Klipper-Repo sauber halten (Moonraker meldet es sonst als "dirty"
+        # und sperrt dessen Updates)
+        excl = os.path.join(extras, '..', '..', '.git', 'info', 'exclude')
+        entry = 'klippy/extras/%s.py' % (name,)
+        try:
+            with open(excl) as f:
+                known = entry in f.read().split('\n')
+            if not known:
+                with open(excl, 'a') as f:
+                    f.write(entry + '\n')
+        except OSError:
+            pass
+    return names
 
 def move_time(dist, speed, accel):
     # Dauer einer Fahrt aus dem Stand in den Stand (Trapez/Dreieck)
@@ -156,10 +182,13 @@ class SV08Loadcell:
                  "Kalibrierungs-Assistent (Mainsail-Dialoge)")]:
             self.gcode.register_command(cmd, getattr(self, 'cmd_' + cmd),
                                         desc=desc)
-        # Eigene Dateien im selben Ordner: SERVICE_RESTART, TAP_TEST
-        self.service_restart = _load_sibling(
-            'service_restart').ServiceRestart(config)
-        self.tap = _load_sibling('sv08_tap').SV08Tap(self)
+        # Die anderen Module ([service_restart], [sv08_tap], [sv08_upgrade]
+        # in sv08-loadcell.cfg): nach einem Update fehlende Symlinks anlegen
+        # und laden. Steht ihr Abschnitt vor diesem, hat Klipper sie mangels
+        # Datei übersprungen - load_object holt das nach
+        for name in link_sibling_modules():
+            if config.has_section(name):
+                self.printer.load_object(config, name)
     def _handle_connect(self):
         self.toolhead = self.printer.lookup_object('toolhead')
         qe = self.printer.lookup_object('query_endstops')

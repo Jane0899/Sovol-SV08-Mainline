@@ -692,8 +692,9 @@ class SV08Loadcell:
                     " %.4f) - weiter, die erste Lage kann etwas zu hoch"
                     " werden" % (waited, change, rate))
                 return
-            gcmd.respond_info("BED_SOAK_WAIT: %+.4f mm/min nach %.0f s -"
-                              " warte weiter" % (change, waited))
+            gcmd.respond_info("BED_SOAK_WAIT: Bett/Zelle %.4f -> %.4f mm,"
+                              " %+.4f mm/min nach %.0f s - warte weiter"
+                              % (last, cur, change, waited))
             last, t_last = cur, t_cur
     def cmd_AUTO_Z_OFFSET_SAVE_CORRECTION(self, gcmd):
         # Nur der Babystep zählt (homing_origin), nicht die G-Code-Höhe -

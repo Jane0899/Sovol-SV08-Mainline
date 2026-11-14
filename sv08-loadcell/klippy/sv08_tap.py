@@ -60,8 +60,14 @@ class SV08Tap:
                       "TEMPERATURE_WAIT SENSOR=extruder MAXIMUM=55",
                       "M106 S0", "M106 P1 S0"):
                 self.gcode.run_script_from_command(c)
-        if lc._nozzle_temp() > 60.:
-            raise gcmd.error("TAP_TEST nur mit kalter Düse (unter 60 °C)")
+        # Kalt, weil eine heiße Düse nachläuft (der Tropfen dämpft den
+        # Aufprall und bleibt kleben) und PEI ab ~217 °C weich wird. Für
+        # Messreihen zur Wärmedrift MAX_TEMP anheben - dann an einer Stelle
+        # abseits des Messpunkts von AUTO_Z_OFFSET tippen
+        max_temp = gcmd.get_float('MAX_TEMP', 60., minval=0., maxval=230.)
+        if lc._nozzle_temp() > max_temp:
+            raise gcmd.error("TAP_TEST nur mit kalter Düse (unter %.0f °C,"
+                             " MAX_TEMP)" % (max_temp,))
         chip = self.printer.lookup_object('adxl345', None)
         if chip is None:
             raise gcmd.error("TAP_TEST: kein [adxl345]")

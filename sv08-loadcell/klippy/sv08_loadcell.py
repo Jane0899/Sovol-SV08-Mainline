@@ -147,6 +147,16 @@ class SV08Loadcell:
         self.z_correction = config.getfloat('z_correction', 0.)
         self.max_offset = config.getfloat('max_offset', 1., above=0.)
         self.last_offset = None
+        # BED_SOAK_WAIT: Beim Aufheizen ändert sich die Betthöhe relativ zur
+        # Wägezelle (gemessen bei 65 °C: erst +0,1 mm, dann über 30 min
+        # -0,16 mm; TAP_TEST bestätigt, dass das Bett wandert, nicht die
+        # Probe). AUTO_Z_OFFSET stimmt nur für den Moment der Messung, ein
+        # kalt gestarteter Druck wird sonst zu hoch. Warten, bis sich die
+        # Höhe um weniger als soak_rate (mm/min) ändert, höchstens
+        # soak_max_wait Sekunden (0 = aus)
+        self.soak_rate = config.getfloat('soak_rate', .004, above=0.)
+        self.soak_interval = config.getfloat('soak_interval', 90., minval=10.)
+        self.soak_max_wait = config.getfloat('soak_max_wait', 900., minval=0.)
         # Z-Anpassung aus dem Filamentprofil (FILAMENT_Z_ADJUST), zählt beim
         # Übernehmen des Babysteps nicht mit
         self.filament_adjust = 0.
@@ -169,6 +179,9 @@ class SV08Loadcell:
                 ('FILAMENT_Z_ADJUST',
                  "Z-Anpassung fürs Filament setzen (Z=mm, absolut; Z=0 hebt"
                  " sie auf). Zählt nicht als Babystep"),
+                ('BED_SOAK_WAIT',
+                 "Warten, bis sich die Betthöhe relativ zur Wägezelle nicht"
+                 " mehr ändert (Probe, ohne Düsenkontakt)"),
                 ('LOADCELL_WAIT_RELEASE',
                  "Warten, bis die Wägezelle wieder frei meldet (statt G4)"),
                 ('LOADCELL_ACCURACY',
@@ -638,6 +651,50 @@ class SV08Loadcell:
                                            % (offset,))
         self.last_offset = offset
         gcmd.respond_info("AUTO_Z_OFFSET: " + msg)
+    def cmd_BED_SOAK_WAIT(self, gcmd):
+        # Misst mit der Probe den Unterschied Bett/Zelle (dieselben Stellen
+        # wie AUTO_Z_OFFSET, je zweimal) und wartet, bis er sich kaum noch
+        # ändert. Braucht nur grobes Z: es zählt die Differenz
+        rate = gcmd.get_float('RATE', self.soak_rate, above=0.)
+        interval = gcmd.get_float('INTERVAL', self.soak_interval, minval=10.)
+        max_wait = gcmd.get_float('MAX_WAIT', self.soak_max_wait, minval=0.)
+        if not max_wait:
+            return
+        if set('xyz') - set(self._homed()):
+            self.gcode.run_script_from_command("G28")
+        cx, cy = self.loadcell_xy
+        bx, by = self.bed_xy
+        def measure():
+            d = 0.
+            for i in range(2):
+                sensor_z = self._probe_at(gcmd, cx, cy)
+                d += self._probe_at(gcmd, bx, by) - sensor_z
+            self._lift_to(self.safe_z)
+            self.toolhead.wait_moves()
+            return d / 2., self.reactor.monotonic()
+        start = None
+        last, t_last = measure()
+        start = t_last
+        while True:
+            self.gcode.run_script_from_command(
+                "M117 Bett setzt sich...\nG4 P%d" % (interval * 1000.,))
+            cur, t_cur = measure()
+            change = (cur - last) / (t_cur - t_last) * 60.
+            waited = t_cur - start
+            if abs(change) <= rate:
+                gcmd.respond_info(
+                    "BED_SOAK_WAIT: Bett stabil nach %.0f s (%+.4f mm/min,"
+                    " Grenze %.4f)" % (waited, change, rate))
+                return
+            if waited >= max_wait:
+                gcmd.respond_info(
+                    "BED_SOAK_WAIT: nach %.0f s noch %+.4f mm/min (Grenze"
+                    " %.4f) - weiter, die erste Lage kann etwas zu hoch"
+                    " werden" % (waited, change, rate))
+                return
+            gcmd.respond_info("BED_SOAK_WAIT: %+.4f mm/min nach %.0f s -"
+                              " warte weiter" % (change, waited))
+            last, t_last = cur, t_cur
     def cmd_AUTO_Z_OFFSET_SAVE_CORRECTION(self, gcmd):
         # Nur der Babystep zählt (homing_origin), nicht die G-Code-Höhe -
         # sonst wäre der Befehl nach einem Druck (Kopf z.B. auf Z25)

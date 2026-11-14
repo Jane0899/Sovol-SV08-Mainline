@@ -80,6 +80,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 |---|---|
 | `CALIBRATE_SV08 [TEMP=220] [BED=60]` | Kalibrierungs-Assistent (einzelne Schritte: `STEP=SENSOR`, `HOME`, `PROBE_TUNE`, `LOADCELL_TUNE`, `HEAT`, `ZOFFSET`, `PAPER`, `SHAPER`, `FINISH`) |
 | `AUTO_Z_OFFSET` | Z-Offset messen und setzen (läuft in `START_PRINT` automatisch) |
+| `BED_SOAK_WAIT [RATE=0.004] [MAX_WAIT=900]` | Warten, bis sich das Bett nach dem Aufheizen gesetzt hat (läuft in `START_PRINT` automatisch, `START_PRINT SOAK=0` überspringt es) |
 | `FILAMENT_Z_ADJUST Z=0.015` | Z-Anpassung fürs Filament (absolut, `Z=0` hebt sie auf). Gehört in den Filament-Start-G-Code des Slicers statt `SET_GCODE_OFFSET Z_ADJUST=…`. `END_PRINT`/`CANCEL_PRINT` setzen sie zurück. Zählt nicht als Babystep |
 | `AUTO_Z_OFFSET_SAVE_CORRECTION` | Babystep seit dem letzten `AUTO_Z_OFFSET` als Korrektur übernehmen, z.B. nach einer Feinkorrektur im Druck. Danach `SAVE_CONFIG` |
 | `MAINTENANCE_CALIBRATE_Z [TEMP=220]` | Z-Nullpunkt neu messen und speichern (ohne Papiertest) |
@@ -102,6 +103,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 - **Homing:** Ein normales `G28` fährt Z nur grob über die induktive Probe an (schnell, Filament an der Düse stört nicht). Genau mit der Düse auf der Wägezelle wird nur gemessen, wo es zählt: in `AUTO_Z_OFFSET` beim Druckstart und in den Messreihen des Assistenten.
 - **Filament an der Düse** verfälscht die Messung auf der Wägezelle. Der Assistent misst den Abstand Probe/Düsenkontakt bei sauberer Düse heiß, warm und kalt (nur beim Abkühlen) und speichert Bezugswert, Temperaturkoeffizient und Toleranz (`contact_gap`, `contact_gap_coeff`, `blob_tolerance`). Liegt eine Messung in `AUTO_Z_OFFSET` darunter, reinigt es die Düse und misst genau neu, bis zu dreimal. Ist sie danach immer noch nicht sauber, bricht der Druck ab: Mit falschem Nullpunkt hält die erste Lage nicht. Direkt nach einer Reinigung (wie in `START_PRINT`) gilt erst ein Abstand von mehr als 0,1 mm unter dem erwarteten als Filament, kleinere Abweichungen sind Drift. `START_PRINT` reinigt ohnehin direkt vor `AUTO_Z_OFFSET` bei Drucktemperatur. Mit `auto_clean: False` unter `[sv08_loadcell]` wird nicht gereinigt, der Druck bricht dann bei Filament an der Düse sofort ab.
 - `AUTO_Z_OFFSET` bricht den Druck ab, wenn der gemessene Offset mehr als 1 mm von der Kalibrierung abweicht (`max_offset`).
+- **Das Bett setzt sich nach dem Aufheizen noch minutenlang.** Am Referenzgerät hob es sich bei 65 °C relativ zur Wägezelle erst um 0,1 mm und sank dann über 30 Minuten um 0,16 mm. `AUTO_Z_OFFSET` misst richtig, aber nur für den Moment: Ein kalt gestarteter Druck wurde ohne Warten zu hoch. `START_PRINT` wartet deshalb mit `BED_SOAK_WAIT`, bis sich die Höhe um weniger als `soak_rate` (0,004 mm/min) ändert, höchstens `soak_max_wait` (15 Minuten). Gemessen wird mit der Probe, ohne Düsenkontakt. Bei warmem Drucker kostet das etwa zwei Minuten.
 
 ### Filament leer
 

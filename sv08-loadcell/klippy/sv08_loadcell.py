@@ -151,7 +151,7 @@ class SV08Loadcell:
         # Übernehmen des Babysteps nicht mit
         self.filament_adjust = 0.
         self.last_result = {}
-        self.wizard = {'temp': 220}
+        self.wizard = {'temp': 220, 'bed': self.WIZARD_BED_TEMP}
         self.z_endstop = None
         self.toolhead = None
         self.printer.register_event_handler("klippy:connect",
@@ -263,7 +263,18 @@ class SV08Loadcell:
     FRESH_CLEAN_AGE = 120.
     # Druckstart: so oft reinigen und neu messen, dann abbrechen
     MAX_BLOB_CLEANS = 3
-    FRESH_BLOB_TOL = .1
+    FRESH_BLOB_TOL = .15
+    # Untergrenze für blob_tolerance aus der Kalibrierung. Nach einer
+    # Reinigung bleibt ein Film von ~0,03 mm, dazu die Wärmedrift der Probe
+    # (s. WIZARD_BED_TEMP). Reste nach einem Druck: 0,4 bis über 0,5 mm
+    MIN_BLOB_TOL = .08
+    # Der Assistent misst mit geheiztem Bett: Das Bett wärmt die induktive
+    # Probe durch, der Abstand Probe/Kontakt sinkt dabei (gemessen: 0,07 mm
+    # in 30 min bei 65 °C, sauberer Düse und fester Düsentemperatur). Kalt
+    # kalibriert läge jeder durchgewärmte Druckstart unter dem Sollwert -
+    # dieselbe Richtung wie Filament an der Düse. Warm kalibriert liegt ein
+    # kälterer Start darüber, und das löst nie aus
+    WIZARD_BED_TEMP = 60
     def _wait_release(self, gcmd, max_wait, settle=0.):
         self.toolhead.wait_moves()
         start = self.reactor.monotonic()
@@ -515,9 +526,14 @@ class SV08Loadcell:
         gcmd.respond_info("LOADCELL_HOME: %s - Filament an der Düse? Grob über"
                           " die Probe gehomt" % (why,))
     def _nozzle_dirty(self):
+        # Seit dem Druckende nicht gereinigt - oder seit dem Klipper-Start
+        # noch nie: das Merkmal übersteht keinen Neustart, der Zustand der
+        # Düse ist dann unbekannt
         m = self._clean_macro()
-        return bool(m is not None and m.get_status(
-            self.reactor.monotonic()).get('dirty', 0))
+        if m is None:
+            return False
+        st = m.get_status(self.reactor.monotonic())
+        return bool(st.get('dirty', 0)) or st.get('last_clean', -1) < 0
     def _clean_macro(self):
         return self.printer.lookup_object('gcode_macro CLEAN_NOZZLE', None)
     def _expected_gap(self, temp):
@@ -874,6 +890,9 @@ class SV08Loadcell:
         if 'TEMP' in gcmd.get_command_parameters():
             self.wizard['temp'] = gcmd.get_int('TEMP', 220, minval=150,
                                                maxval=300)
+        if 'BED' in gcmd.get_command_parameters():
+            self.wizard['bed'] = gcmd.get_int('BED', self.WIZARD_BED_TEMP,
+                                              minval=0, maxval=110)
         handler = getattr(self, '_wz_' + step.lower(), None)
         if handler is None:
             raise gcmd.error("CALIBRATE_SV08: unbekannter Schritt %s" % step)
@@ -888,7 +907,8 @@ class SV08Loadcell:
                            "error")])
             raise
     def _wz_start(self, gcmd):
-        self.wizard = {'temp': self.wizard.get('temp', 220)}
+        self.wizard = {'temp': self.wizard.get('temp', 220),
+                       'bed': self.wizard.get('bed', self.WIZARD_BED_TEMP)}
         idle = self.printer.lookup_object('idle_timeout', None)
         if idle is not None:
             self.wizard['idle_timeout'] = idle.idle_timeout
@@ -900,9 +920,10 @@ class SV08Loadcell:
             "  4. Messreihe Wägezelle  5. Düse reinigen + heizen"
             " (%d °C)  6. Z-Nullpunkt  7. Papiertest  8. Input Shaper"
             % (self.wizard['temp'],),
-            "Dauer ca. 30-40 Minuten. Bett leer räumen, Düse sauber, ein"
-            " Blatt Papier bereitlegen.",
-            "Andere Drucktemperatur: CALIBRATE_SV08 TEMP=240"], 'SENSOR',
+            "Dauer ca. 60 Minuten. Bett leer räumen, Düse sauber, ein"
+            " Blatt Papier bereitlegen. Das Bett heizt dabei auf %d °C."
+            % (self.wizard['bed'],),
+            "Andere Temperaturen: CALIBRATE_SV08 TEMP=240 BED=80"], 'SENSOR',
             "Start")
     def _restore_idle_timeout(self):
         if 'idle_timeout' in self.wizard:
@@ -952,6 +973,9 @@ class SV08Loadcell:
     # 2. Homing + QGL
     def _wz_home(self, gcmd):
         self._prompt_end()
+        # Bett schon jetzt heizen (ohne zu warten): bis zur Messung des
+        # Abstands Probe/Kontakt ist die Probe dann durchgewärmt
+        self._run("M140 S%d" % (self.wizard['bed'],))
         self._run("G28")
         self._run("QUAD_GANTRY_LEVEL")
         self._run("G28 Z")
@@ -1099,6 +1123,8 @@ class SV08Loadcell:
     def _wz_heat(self, gcmd):
         self._prompt_end()
         self._ensure_leveled()
+        if self.wizard['bed']:
+            self._run("M190 S%d" % (self.wizard['bed'],))
         points = self.wizard['gap_points'] = []
         # Abstand Probe/Kontakt bei drei Temperaturen: heiß, warm, kalt.
         # Ergibt Bezugswert und Temperaturkoeffizient dieses Druckers.
@@ -1175,7 +1201,7 @@ class SV08Loadcell:
             a, b, sd = fit
             self.contact_gap, self.contact_gap_coeff = a, b
             self.contact_gap_temp = float(self.wizard['temp'])
-            self.blob_tolerance = max(.04, round(5. * sd, 3))
+            self.blob_tolerance = max(self.MIN_BLOB_TOL, round(5. * sd, 3))
             # Startpunkt der Feinannäherung: kleinster zu erwartender
             # Abstand (Düse bei 300 °C am längsten) mit Reserve
             self.probe_contact_gap = max(0., round(
@@ -1258,6 +1284,7 @@ class SV08Loadcell:
         self._run("G0 Z10 F600")
         self._run("G90")
         self._run("M104 S0")
+        self._run("M140 S0")
         self._prompt("7. Papiertest", [
             result,
             "Weiter: Input Shaper messen (ADXL im Druckkopf, ca. 3 Minuten,"

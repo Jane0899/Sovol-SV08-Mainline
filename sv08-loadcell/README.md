@@ -54,7 +54,7 @@ Der Installer:
 4. trägt den Updater (und `[timelapse]`) in `moonraker.conf` ein,
 5. startet Klipper und Moonraker neu.
 
-Danach in Mainsail in der Konsole **`CALIBRATE_SV08`** eingeben und den Dialogen folgen. Das dauert ca. 30–40 Minuten. Bett leer räumen und ein Blatt Papier bereitlegen. Für eine andere Drucktemperatur: `CALIBRATE_SV08 TEMP=240`.
+Danach in Mainsail in der Konsole **`CALIBRATE_SV08`** eingeben und den Dialogen folgen. Das dauert ca. 60 Minuten. Bett leer räumen und ein Blatt Papier bereitlegen. Das Bett heizt dabei auf 60 °C: Es wärmt die induktive Probe durch, und der Abstand Probe/Düsenkontakt für die Filament-Erkennung soll im Zustand eines echten Druckstarts gemessen werden. Für andere Temperaturen: `CALIBRATE_SV08 TEMP=240 BED=80`.
 
 ### Slicer
 
@@ -78,7 +78,7 @@ Eigene Makros oder Änderungen kommen ans Ende der `printer.cfg`. Eine gleichnam
 
 | Befehl | Zweck |
 |---|---|
-| `CALIBRATE_SV08 [TEMP=220]` | Kalibrierungs-Assistent (einzelne Schritte: `STEP=SENSOR`, `HOME`, `PROBE_TUNE`, `LOADCELL_TUNE`, `HEAT`, `ZOFFSET`, `PAPER`, `SHAPER`, `FINISH`) |
+| `CALIBRATE_SV08 [TEMP=220] [BED=60]` | Kalibrierungs-Assistent (einzelne Schritte: `STEP=SENSOR`, `HOME`, `PROBE_TUNE`, `LOADCELL_TUNE`, `HEAT`, `ZOFFSET`, `PAPER`, `SHAPER`, `FINISH`) |
 | `AUTO_Z_OFFSET` | Z-Offset messen und setzen (läuft in `START_PRINT` automatisch) |
 | `FILAMENT_Z_ADJUST Z=0.015` | Z-Anpassung fürs Filament (absolut, `Z=0` hebt sie auf). Gehört in den Filament-Start-G-Code des Slicers statt `SET_GCODE_OFFSET Z_ADJUST=…`. `END_PRINT`/`CANCEL_PRINT` setzen sie zurück. Zählt nicht als Babystep |
 | `AUTO_Z_OFFSET_SAVE_CORRECTION` | Babystep seit dem letzten `AUTO_Z_OFFSET` als Korrektur übernehmen, z.B. nach einer Feinkorrektur im Druck. Danach `SAVE_CONFIG` |
